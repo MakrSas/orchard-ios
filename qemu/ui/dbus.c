@@ -1,0 +1,710 @@
+/*
+ * QEMU DBus display
+ *
+ * Copyright (c) 2021 Marc-André Lureau <marcandre.lureau@redhat.com>
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+#include "qemu/osdep.h"
+#include "qemu/cutils.h"
+#include "qemu/error-report.h"
+#include "qemu/dbus.h"
+#include "qemu/main-loop.h"
+#include "qemu/option.h"
+#include "qom/object_interfaces.h"
+#include "qapi-types-char.h"
+#include "system/system.h"
+#include "ui/dbus-module.h"
+#ifdef CONFIG_OPENGL
+#include "ui/egl-helpers.h"
+#include "ui/egl-context.h"
+#endif
+#include "qemu/audio.h"
+#include "audio/audio_int.h" /* FIXME: use QOM dynamic cast instead of drv->name */
+#include "qapi/error.h"
+#include "trace.h"
+
+#include "dbus.h"
+
+static DBusDisplay *dbus_display;
+
+#ifdef CONFIG_OPENGL
+static QEMUGLContext dbus_create_context(DisplayGLCtx *dgc,
+                                         QEMUGLParams *params)
+{
+    return qemu_egl_create_context(dgc, params, qemu_egl_rn_ctx);
+}
+
+static bool
+dbus_is_compatible_dcl(DisplayGLCtx *dgc,
+                       DisplayChangeListener *dcl)
+{
+    return
+        dcl->ops == &dbus_gl_dcl_ops ||
+        dcl->ops == &dbus_console_dcl_ops;
+}
+
+static void
+dbus_create_texture(DisplayGLCtx *ctx, DisplaySurface *surface)
+{
+    surface_gl_create_texture(ctx->gls, surface);
+}
+
+static void
+dbus_destroy_texture(DisplayGLCtx *ctx, DisplaySurface *surface)
+{
+    surface_gl_destroy_texture(ctx->gls, surface);
+}
+
+static void
+dbus_update_texture(DisplayGLCtx *ctx, DisplaySurface *surface,
+                    int x, int y, int w, int h)
+{
+    surface_gl_update_texture(ctx->gls, surface, x, y, w, h);
+}
+
+static const DisplayGLCtxOps dbus_gl_ops = {
+    .dpy_gl_ctx_is_compatible_dcl = dbus_is_compatible_dcl,
+    .dpy_gl_ctx_create       = dbus_create_context,
+    .dpy_gl_ctx_destroy      = qemu_egl_destroy_context,
+    .dpy_gl_ctx_make_current = qemu_egl_make_context_current,
+    .dpy_gl_ctx_create_texture = dbus_create_texture,
+    .dpy_gl_ctx_destroy_texture = dbus_destroy_texture,
+    .dpy_gl_ctx_update_texture = dbus_update_texture,
+};
+#endif
+
+static NotifierList dbus_display_notifiers =
+    NOTIFIER_LIST_INITIALIZER(dbus_display_notifiers);
+
+void
+dbus_display_notifier_add(Notifier *notifier)
+{
+    notifier_list_add(&dbus_display_notifiers, notifier);
+}
+
+static void
+dbus_display_notifier_remove(Notifier *notifier)
+{
+    notifier_remove(notifier);
+}
+
+void
+dbus_display_notify(DBusDisplayEvent *event)
+{
+    notifier_list_notify(&dbus_display_notifiers, event);
+}
+
+static void
+dbus_display_init(Object *o)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(o);
+    g_autoptr(GDBusObjectSkeleton) vm = NULL;
+
+#ifdef CONFIG_OPENGL
+    dd->glctx.ops = &dbus_gl_ops;
+    if (display_opengl) {
+        dd->glctx.gls = qemu_gl_init_shader();
+    }
+#endif
+    dd->iface = qemu_dbus_display1_vm_skeleton_new();
+    dd->consoles = g_ptr_array_new_with_free_func(g_object_unref);
+
+    dd->server = g_dbus_object_manager_server_new(DBUS_DISPLAY1_ROOT);
+
+    vm = g_dbus_object_skeleton_new(DBUS_DISPLAY1_ROOT "/VM");
+    g_dbus_object_skeleton_add_interface(
+        vm, G_DBUS_INTERFACE_SKELETON(dd->iface));
+    g_dbus_object_manager_server_export(dd->server, vm);
+
+    dbus_clipboard_init(dd);
+    dbus_chardev_init(dd);
+}
+
+static void
+dbus_display_finalize(Object *o)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(o);
+
+    if (dd->console_notifier.notify) {
+        qemu_console_remove_notifier(&dd->console_notifier);
+    }
+    if (dd->notifier.notify) {
+        dbus_display_notifier_remove(&dd->notifier);
+    }
+
+    dbus_clipboard_fini(dd);
+
+    g_clear_object(&dd->server);
+    g_clear_pointer(&dd->consoles, g_ptr_array_unref);
+    if (dd->add_client_cancellable) {
+        g_cancellable_cancel(dd->add_client_cancellable);
+    }
+    g_clear_object(&dd->add_client_cancellable);
+    g_clear_object(&dd->bus);
+    g_clear_object(&dd->iface);
+    g_free(dd->dbus_addr);
+    g_free(dd->audiodev);
+#ifdef CONFIG_OPENGL
+    g_clear_pointer(&dd->glctx.gls, qemu_gl_fini_shader);
+#endif
+    dbus_display = NULL;
+}
+
+static void
+dbus_update_console_ids(DBusDisplay *dd)
+{
+    g_autoptr(GArray) arr = g_array_new(FALSE, FALSE, sizeof(guint32));
+
+    for (guint i = 0; i < dd->consoles->len; i++) {
+        DBusDisplayConsole *ddc = g_ptr_array_index(dd->consoles, i);
+        guint32 idx = dbus_display_console_get_index(ddc);
+        g_array_append_val(arr, idx);
+    }
+
+    g_object_set(dd->iface, "console-ids",
+        g_variant_new_fixed_array(G_VARIANT_TYPE("u"),
+            arr->data, arr->len,
+            sizeof(guint32)),
+        NULL);
+}
+
+static bool
+dbus_display_add_console(DBusDisplay *dd, QemuConsole *con, Error **errp)
+{
+    DBusDisplayConsole *dbus_console;
+
+    for (guint i = 0; i < dd->consoles->len; i++) {
+        DBusDisplayConsole *ddc = g_ptr_array_index(dd->consoles, i);
+        if (dbus_display_console_get_qemu_console(ddc) == con) {
+            return true;
+        }
+    }
+
+    if (qemu_console_is_graphic(con) &&
+        dd->gl_mode != DISPLAY_GL_MODE_OFF) {
+        qemu_console_set_display_gl_ctx(con, &dd->glctx);
+    }
+
+    dbus_console = dbus_display_console_new(dd, con);
+    g_ptr_array_add(dd->consoles, dbus_console);
+    g_dbus_object_manager_server_export(dd->server,
+                                        G_DBUS_OBJECT_SKELETON(dbus_console));
+    dbus_update_console_ids(dd);
+    return true;
+}
+
+static void
+dbus_display_remove_console(DBusDisplay *dd, QemuConsole *con)
+{
+    for (guint i = 0; i < dd->consoles->len; i++) {
+        DBusDisplayConsole *ddc = g_ptr_array_index(dd->consoles, i);
+        if (dbus_display_console_get_qemu_console(ddc) == con) {
+            if (display_opengl) {
+                qemu_console_set_display_gl_ctx(con, NULL);
+            }
+            g_dbus_object_manager_server_unexport(
+                dd->server,
+                g_dbus_object_get_object_path(G_DBUS_OBJECT(ddc)));
+            g_ptr_array_remove_index(dd->consoles, i);
+            dbus_update_console_ids(dd);
+            break;
+        }
+    }
+}
+
+static void
+dbus_console_notify(Notifier *n, void *data)
+{
+    DBusDisplay *dd = container_of(n, DBusDisplay, console_notifier);
+    QemuConsoleEvent *event = data;
+
+    switch (event->type) {
+    case QEMU_CONSOLE_ADDED: {
+        Error *err = NULL;
+        if (!dbus_display_add_console(dd, event->con, &err)) {
+            error_report_err(err);
+        }
+        break;
+    }
+    case QEMU_CONSOLE_REMOVED:
+        dbus_display_remove_console(dd, event->con);
+        break;
+    }
+}
+
+static void
+dbus_display_complete(UserCreatable *uc, Error **errp)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(uc);
+    g_autoptr(GError) err = NULL;
+    g_autofree char *uuid = qemu_uuid_unparse_strdup(&qemu_uuid);
+    int idx;
+
+    if (!object_resolve_path_type("", TYPE_DBUS_DISPLAY, NULL)) {
+        error_setg(errp, "There is already an instance of %s",
+                   TYPE_DBUS_DISPLAY);
+        return;
+    }
+
+    if (dd->p2p) {
+        /* wait for dbus_display_add_client() */
+        dbus_display = dd;
+    } else if (dd->dbus_addr && *dd->dbus_addr) {
+        dd->bus = g_dbus_connection_new_for_address_sync(dd->dbus_addr,
+                        G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT |
+                        G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
+                        NULL, NULL, &err);
+    } else {
+        dd->bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &err);
+    }
+    if (err) {
+        error_setg(errp, "failed to connect to DBus: %s", err->message);
+        return;
+    }
+
+    {
+        AudioBackend *audio_be = audio_get_default_audio_be(NULL);
+        if (audio_be && !audio_be_can_set_dbus_server(audio_be)) {
+            audio_be = NULL;
+        }
+        if (dd->audiodev && *dd->audiodev) {
+            audio_be = audio_be_by_name(dd->audiodev, errp);
+            if (!audio_be) {
+                return;
+            }
+        }
+        if (audio_be && !audio_be_set_dbus_server(audio_be, dd->server, dd->p2p, errp)) {
+            return;
+        }
+    }
+
+    for (idx = 0;; idx++) {
+        QemuConsole *con = qemu_console_lookup_by_index(idx);
+        if (!con) {
+            break;
+        }
+        if (!dbus_display_add_console(dd, con, errp)) {
+            return;
+        }
+    }
+
+    g_object_set(dd->iface,
+                 "name", qemu_name ?: "QEMU " QEMU_VERSION,
+                 "uuid", uuid,
+                 NULL);
+    dbus_update_console_ids(dd);
+
+    dd->console_notifier.notify = dbus_console_notify;
+    qemu_console_add_notifier(&dd->console_notifier);
+
+    if (dd->bus) {
+        g_dbus_object_manager_server_set_connection(dd->server, dd->bus);
+        g_bus_own_name_on_connection(dd->bus, "org.qemu",
+                                     G_BUS_NAME_OWNER_FLAGS_NONE,
+                                     NULL, NULL, NULL, NULL);
+    }
+}
+
+typedef struct DBusDisplayAddClientData {
+    DBusDisplay *display;
+    GCancellable *cancellable;
+} DBusDisplayAddClientData;
+
+static void dbus_display_add_client_data_free(DBusDisplayAddClientData *data)
+{
+    if (data->display) {
+        object_unref(OBJECT(data->display));
+        data->display = NULL;
+    }
+    g_clear_object(&data->cancellable);
+    g_free(data);
+}
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(DBusDisplayAddClientData,
+                              dbus_display_add_client_data_free)
+
+static void
+dbus_display_add_client_ready(GObject *source_object,
+                              GAsyncResult *res,
+                              gpointer user_data)
+{
+    g_autoptr(DBusDisplayAddClientData) data = user_data;
+    DBusDisplay *display = data->display;
+    bool current = display->add_client_cancellable == data->cancellable;
+    g_autoptr(GError) err = NULL;
+    g_autoptr(GDBusConnection) conn = NULL;
+
+    if (current) {
+        g_clear_object(&display->add_client_cancellable);
+    }
+
+    conn = g_dbus_connection_new_finish(res, &err);
+    if (!conn) {
+        if (!g_error_matches(err, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            error_printf("Failed to accept D-Bus client: %s", err->message);
+        }
+        return;
+    }
+
+    if (!current) {
+        return;
+    }
+
+    g_dbus_object_manager_server_set_connection(display->server, conn);
+    g_dbus_connection_start_message_processing(conn);
+}
+
+
+static bool
+dbus_display_add_client(int csock, Error **errp)
+{
+    g_autoptr(GError) err = NULL;
+    g_autoptr(GSocket) socket = NULL;
+    g_autoptr(GSocketConnection) conn = NULL;
+    g_autofree char *guid = g_dbus_generate_guid();
+    DBusDisplayAddClientData *data;
+
+    if (!dbus_display) {
+        error_setg(errp, "p2p connections not accepted in bus mode");
+        return false;
+    }
+
+    if (dbus_display->add_client_cancellable) {
+        g_cancellable_cancel(dbus_display->add_client_cancellable);
+        g_clear_object(&dbus_display->add_client_cancellable);
+    }
+
+#ifdef WIN32
+    socket = g_socket_new_from_fd(_get_osfhandle(csock), &err);
+#else
+    socket = g_socket_new_from_fd(csock, &err);
+#endif
+    if (!socket) {
+        error_setg(errp, "Failed to setup D-Bus socket: %s", err->message);
+        close(csock);
+        return false;
+    }
+#ifdef WIN32
+    /* socket owns the SOCKET handle now, so release our osf handle */
+    qemu_close_socket_osfhandle(csock);
+#endif
+
+    conn = g_socket_connection_factory_create_connection(socket);
+
+    dbus_display->add_client_cancellable = g_cancellable_new();
+    data = g_new0(DBusDisplayAddClientData, 1);
+    data->display = DBUS_DISPLAY(object_ref(OBJECT(dbus_display)));
+    data->cancellable = g_object_ref(dbus_display->add_client_cancellable);
+
+    GDBusConnectionFlags flags =
+        G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_SERVER |
+        G_DBUS_CONNECTION_FLAGS_DELAY_MESSAGE_PROCESSING;
+
+#ifdef WIN32
+    flags |= G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_ALLOW_ANONYMOUS;
+#endif
+
+    g_dbus_connection_new(G_IO_STREAM(conn),
+                          guid,
+                          flags,
+                          NULL,
+                          dbus_display->add_client_cancellable,
+                          dbus_display_add_client_ready,
+                          data);
+
+    return true;
+}
+
+static bool
+get_dbus_p2p(Object *o, Error **errp)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(o);
+
+    return dd->p2p;
+}
+
+static void
+set_dbus_p2p(Object *o, bool p2p, Error **errp)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(o);
+
+    dd->p2p = p2p;
+}
+
+static char *
+get_dbus_addr(Object *o, Error **errp)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(o);
+
+    return g_strdup(dd->dbus_addr);
+}
+
+static void
+set_dbus_addr(Object *o, const char *str, Error **errp)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(o);
+
+    g_free(dd->dbus_addr);
+    dd->dbus_addr = g_strdup(str);
+}
+
+static char *
+get_audiodev(Object *o, Error **errp)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(o);
+
+    return g_strdup(dd->audiodev);
+}
+
+static void
+set_audiodev(Object *o, const char *str, Error **errp)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(o);
+
+    g_free(dd->audiodev);
+    dd->audiodev = g_strdup(str);
+}
+
+
+static int
+get_gl_mode(Object *o, Error **errp)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(o);
+
+    return dd->gl_mode;
+}
+
+static void
+set_gl_mode(Object *o, int val, Error **errp)
+{
+    DBusDisplay *dd = DBUS_DISPLAY(o);
+
+    dd->gl_mode = val;
+}
+
+static void
+dbus_display_class_init(ObjectClass *oc, const void *data)
+{
+    UserCreatableClass *ucc = USER_CREATABLE_CLASS(oc);
+
+    ucc->complete = dbus_display_complete;
+    object_class_property_add_bool(oc, "p2p", get_dbus_p2p, set_dbus_p2p);
+    object_class_property_add_str(oc, "addr", get_dbus_addr, set_dbus_addr);
+    object_class_property_add_str(oc, "audiodev", get_audiodev, set_audiodev);
+    object_class_property_add_enum(oc, "gl-mode",
+                                   "DisplayGLMode", &DisplayGLMode_lookup,
+                                   get_gl_mode, set_gl_mode);
+}
+
+#define TYPE_CHARDEV_VC "chardev-vc"
+
+typedef struct DBusVCChardev {
+    DBusChardev parent;
+
+    ChardevVCEncoding encoding;
+} DBusVCChardev;
+
+typedef struct DBusVCClass {
+    DBusChardevClass parent_class;
+
+    void (*parent_parse)(QemuOpts *opts, ChardevBackend *b, Error **errp);
+} DBusVCClass;
+
+DECLARE_INSTANCE_CHECKER(DBusVCChardev, DBUS_VC_CHARDEV,
+                         TYPE_CHARDEV_VC)
+DECLARE_CLASS_CHECKERS(DBusVCClass, DBUS_VC,
+                       TYPE_CHARDEV_VC)
+
+static void
+dbus_vc_parse(QemuOpts *opts, ChardevBackend *backend,
+              Error **errp)
+{
+    DBusVCClass *klass = DBUS_VC_CLASS(object_class_by_name(TYPE_CHARDEV_VC));
+    const char *name = qemu_opt_get(opts, "name");
+    const char *id = qemu_opts_id(opts);
+    const char *str;
+    ChardevDBus *dbus;
+
+    if (name == NULL) {
+        if (g_str_has_prefix(id, "compat_monitor")) {
+            name = "org.qemu.monitor.hmp.0";
+        } else if (g_str_has_prefix(id, "serial")) {
+            name = "org.qemu.console.serial.0";
+        } else {
+            name = "";
+        }
+        if (!qemu_opt_set(opts, "name", name, errp)) {
+            return;
+        }
+    }
+
+    klass->parent_parse(opts, backend, errp);
+    dbus = backend->u.dbus.data;
+    str = qemu_opt_get(opts, "encoding");
+    if (str) {
+        int cs = qapi_enum_parse(&ChardevVCEncoding_lookup, str, -1, errp);
+        if (cs < 0) {
+            return;
+        }
+        dbus->has_encoding = true;
+        dbus->encoding = cs;
+    }
+}
+
+CHARDEV_VC_ENCODING_PROPERTY_DEFINE(DBUS_VC_CHARDEV)
+
+static bool
+dbus_vc_open(Chardev *chr, ChardevBackend *backend, Error **errp)
+{
+    DBusChardev *dc = DBUS_CHARDEV(chr);
+    DBusVCChardev *vc = DBUS_VC_CHARDEV(chr);
+    ChardevClass *parent =
+        CHARDEV_CLASS(object_class_by_name(TYPE_CHARDEV_DBUS));
+    ChardevDBus *be = backend->u.dbus.data;
+
+    if (be->has_encoding) {
+        vc->encoding = be->encoding;
+    }
+    dc->iface_vc_encoding =
+        qemu_dbus_display1_chardev_vcencoding_skeleton_new();
+    qemu_dbus_display1_chardev_vcencoding_set_encoding(
+        dc->iface_vc_encoding,
+        qapi_enum_lookup(&ChardevVCEncoding_lookup, vc->encoding));
+
+    return parent->chr_open(chr, backend, errp);
+}
+
+static void
+dbus_vc_class_init(ObjectClass *oc, const void *data)
+{
+    DBusVCClass *klass = DBUS_VC_CLASS(oc);
+    ChardevClass *cc = CHARDEV_CLASS(oc);
+
+    klass->parent_parse = cc->chr_parse;
+    cc->chr_parse = dbus_vc_parse;
+    cc->chr_open = dbus_vc_open;
+    cc->supports_encoding_opts = true;
+
+    chardev_vc_add_encoding_prop(oc, get_encoding, set_encoding);
+}
+
+static void
+dbus_vc_init(Object *obj)
+{
+    DBusVCChardev *vc = DBUS_VC_CHARDEV(obj);
+
+    vc->encoding = CHARDEV_VC_ENCODING_UTF8;
+}
+
+static const TypeInfo dbus_vc_type_info = {
+    .name = TYPE_CHARDEV_VC,
+    .parent = TYPE_CHARDEV_DBUS,
+    .instance_size = sizeof(DBusVCChardev),
+    .instance_init = dbus_vc_init,
+    .instance_post_init = object_apply_compat_props,
+    .class_size = sizeof(DBusVCClass),
+    .class_init = dbus_vc_class_init,
+};
+
+static void
+early_dbus_init(DisplayOptions *opts)
+{
+    DisplayGLMode mode = opts->has_gl ? opts->gl : DISPLAY_GL_MODE_OFF;
+
+    if (mode != DISPLAY_GL_MODE_OFF) {
+#ifdef CONFIG_OPENGL
+        egl_init(opts->u.dbus.rendernode, mode, &error_fatal);
+#else
+        error_report("dbus: GL rendering is not supported");
+#endif
+    }
+
+    using_dbus_display = 1;
+
+    type_register_static(&dbus_vc_type_info);
+}
+
+static void
+dbus_init(DisplayState *ds, DisplayOptions *opts)
+{
+    DisplayGLMode mode = opts->has_gl ? opts->gl : DISPLAY_GL_MODE_OFF;
+
+    if (opts->u.dbus.addr && opts->u.dbus.p2p) {
+        error_report("dbus: can't accept both addr=X and p2p=yes options");
+        exit(1);
+    }
+
+    object_new_with_props(TYPE_DBUS_DISPLAY,
+                          object_get_objects_root(),
+                          "dbus-display", &error_fatal,
+                          "addr", opts->u.dbus.addr ?: "",
+                          "audiodev", opts->u.dbus.audiodev ?: "",
+                          "gl-mode", DisplayGLMode_str(mode),
+                          "p2p", yes_no(opts->u.dbus.p2p),
+                          NULL);
+}
+
+static const TypeInfo dbus_display_info = {
+    .name = TYPE_DBUS_DISPLAY,
+    .parent = TYPE_OBJECT,
+    .instance_size = sizeof(DBusDisplay),
+    .instance_init = dbus_display_init,
+    .instance_finalize = dbus_display_finalize,
+    .class_init = dbus_display_class_init,
+    .interfaces = (const InterfaceInfo[]) {
+        { TYPE_USER_CREATABLE },
+        { }
+    }
+};
+
+static void
+dbus_cleanup(void)
+{
+    Object *o;
+
+    o = object_resolve_path_component(object_get_objects_root(),
+                                      "dbus-display");
+    if (o) {
+        object_unparent(o);
+    }
+}
+
+static QemuDisplay qemu_display_dbus = {
+    .type       = DISPLAY_TYPE_DBUS,
+    .early_init = early_dbus_init,
+    .init       = dbus_init,
+    .cleanup    = dbus_cleanup,
+    .vc         = "vc",
+};
+
+static void register_dbus(void)
+{
+    qemu_dbus_display = (struct QemuDBusDisplayOps) {
+        .add_client = dbus_display_add_client,
+    };
+    type_register_static(&dbus_display_info);
+    qemu_display_register(&qemu_display_dbus);
+}
+
+type_init(register_dbus);
+
+#ifdef CONFIG_OPENGL
+module_dep("ui-opengl");
+#endif

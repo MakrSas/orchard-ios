@@ -1,0 +1,41 @@
+/*
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation, or (at your option) any
+ * later version. See the COPYING file in the top-level directory.
+ */
+
+#ifndef RISCV_TARGET_ELF_H
+#define RISCV_TARGET_ELF_H
+
+#define ELF_MACHINE             EM_RISCV
+
+#ifdef TARGET_RISCV32
+#define ELF_CLASS               ELFCLASS32
+#define VDSO_HEADER             "vdso-32.c.inc"
+#else
+#define ELF_CLASS               ELFCLASS64
+#define VDSO_HEADER             "vdso-64.c.inc"
+#endif
+
+#define HAVE_ELF_HWCAP          1
+#define HAVE_ELF_CORE_DUMP      1
+
+/* Mirrors struct user_regs_struct: pc followed by x1 (ra) .. x31 (t6). */
+typedef struct target_elf_gregset_t {
+    abi_ulong pc;
+    abi_ulong regs[31];
+} target_elf_gregset_t;
+
+#define HAVE_ELF_CORE_FPREGS    1
+
+/*
+ * Matches struct __riscv_d_ext_state from uapi/asm/ptrace.h:
+ *   f0-f31 as 64-bit values followed by fcsr.
+ */
+typedef struct target_elf_fpregset_t {
+    uint64_t fpr[32];
+    uint32_t fcsr;
+} target_elf_fpregset_t;
+
+#endif

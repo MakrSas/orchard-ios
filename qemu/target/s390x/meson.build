@@ -1,0 +1,57 @@
+s390x_ss = ss.source_set()
+s390x_common_ss = ss.source_set()
+s390x_common_system_ss = ss.source_set()
+s390x_system_ss = ss.source_set()
+s390x_user_ss = ss.source_set()
+
+s390x_ss.add(files(
+  'cpu.c',
+  'cpu_features.c',
+  'cpu_models.c',
+  'interrupt.c',
+  'cpu-dump.c',
+))
+
+gen_features = executable('gen-features', 'gen-features.c', native: true,
+                          build_by_default: false)
+
+gen_features_h = custom_target('gen-features.h',
+                               output: 'gen-features.h',
+                               capture: true,
+                               command: gen_features)
+
+s390x_common_ss.add(gen_features_h)
+s390x_common_ss.add(files(
+  'gdbstub.c',
+))
+
+s390x_system_ss.add(gen_features_h)
+s390x_system_ss.add(files(
+  'ioinst.c',
+))
+
+s390x_common_system_ss.add(files(
+  'helper.c',
+  'arch_dump.c',
+  'diag.c',
+  'machine.c',
+  'mmu_helper.c',
+  'sigp.c',
+  'cpu-system.c',
+  'cpu_models_system.c',
+))
+
+s390x_user_ss.add(files(
+  'cpu_models_user.c',
+))
+
+subdir('tcg')
+subdir('kvm')
+
+s390x_common_system_ss.add_all(s390x_common_ss)
+s390x_user_ss.add_all(s390x_common_ss)
+
+target_arch += {'s390x': s390x_ss}
+target_system_arch += {'s390x': s390x_system_ss}
+target_common_system_arch += {'s390x': s390x_common_system_ss}
+target_user_arch += {'s390x': s390x_user_ss}

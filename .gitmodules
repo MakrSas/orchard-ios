@@ -1,0 +1,3 @@
+[submodule "reims-vgpu"]
+	path = reims-vgpu
+	url = https://github.com/steelbrain/reims-vgpu

@@ -1,0 +1,161 @@
+/*
+ * SABRELITE Board System emulation.
+ *
+ * Copyright (c) 2015 Jean-Christophe Dubois <jcd@tribudubois.net>
+ *
+ * This code is licensed under the GPL, version 2 or later.
+ * See the file `COPYING' in the top level directory.
+ *
+ * It (partially) emulates a sabrelite board, with a Freescale
+ * i.MX6 SoC
+ */
+
+#include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "hw/arm/fsl-imx6.h"
+#include "hw/arm/boot.h"
+#include "hw/core/boards.h"
+#include "hw/core/qdev-properties.h"
+#include "qemu/error-report.h"
+#include "system/qtest.h"
+
+struct SabreliteMachineState {
+    MachineState parent_obj;
+
+    FslIMX6State soc;
+    CanBusState *canbus[FSL_IMX6_NUM_CANS];
+    struct arm_boot_info bootinfo;
+};
+
+#define TYPE_SABRELITE_MACHINE MACHINE_TYPE_NAME("sabrelite")
+OBJECT_DECLARE_SIMPLE_TYPE(SabreliteMachineState, SABRELITE_MACHINE)
+
+/* No need to do any particular setup for secondary boot */
+static void sabrelite_write_secondary(ARMCPU *cpu,
+                                      const struct arm_boot_info *info)
+{
+}
+
+/* Secondary cores are reset through SRC device */
+static void sabrelite_reset_secondary(ARMCPU *cpu,
+                                      const struct arm_boot_info *info)
+{
+}
+
+static void sabrelite_init(MachineState *machine)
+{
+    SabreliteMachineState *s = SABRELITE_MACHINE(machine);
+
+    /* Check the amount of memory is compatible with the SOC */
+    if (machine->ram_size > FSL_IMX6_MMDC_SIZE) {
+        error_report("RAM size " RAM_ADDR_FMT " above max supported (%08x)",
+                     machine->ram_size, FSL_IMX6_MMDC_SIZE);
+        exit(1);
+    }
+
+    object_initialize_child(OBJECT(machine), "soc", &s->soc, TYPE_FSL_IMX6);
+
+    /* Ethernet PHY address is 6 */
+    object_property_set_int(OBJECT(&s->soc), "fec-phy-num", 6, &error_fatal);
+
+    for (int i = 0; i < FSL_IMX6_NUM_CANS; i++) {
+        g_autofree char *bus_name = g_strdup_printf("canbus%d", i);
+
+        object_property_set_link(OBJECT(&s->soc), bus_name,
+                                 OBJECT(s->canbus[i]), &error_fatal);
+    }
+
+    qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
+
+    memory_region_add_subregion(get_system_memory(), FSL_IMX6_MMDC_ADDR,
+                                machine->ram);
+
+    {
+        /*
+         * TODO: Ideally we would expose the chip select and spi bus on the
+         * SoC object using alias properties; then we would not need to
+         * directly access the underlying spi device object.
+         */
+        /* Add the sst25vf016b NOR FLASH memory to first SPI */
+        Object *spi_dev;
+
+        spi_dev = object_resolve_path_component(OBJECT(&s->soc), "spi1");
+        if (spi_dev) {
+            SSIBus *spi_bus;
+
+            spi_bus = (SSIBus *)qdev_get_child_bus(DEVICE(spi_dev), "spi");
+            if (spi_bus) {
+                DeviceState *flash_dev;
+                qemu_irq cs_line;
+                DriveInfo *dinfo = drive_get(IF_MTD, 0, 0);
+
+                flash_dev = qdev_new("sst25vf016b");
+                if (dinfo) {
+                    qdev_prop_set_drive_err(flash_dev, "drive",
+                                            blk_by_legacy_dinfo(dinfo),
+                                            &error_fatal);
+                }
+                qdev_realize_and_unref(flash_dev, BUS(spi_bus), &error_fatal);
+
+                cs_line = qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0);
+                qdev_connect_gpio_out(DEVICE(&s->soc.gpio[2]), 19, cs_line);
+            }
+        }
+    }
+
+    /* DDR memory start */
+    s->bootinfo.loader_start = FSL_IMX6_MMDC_ADDR;
+    /* No board ID, we boot from DT tree */
+    s->bootinfo.board_id = -1;
+    s->bootinfo.ram_size = machine->ram_size;
+    s->bootinfo.secure_boot = true;
+    s->bootinfo.write_secondary_boot = sabrelite_write_secondary;
+    s->bootinfo.secondary_cpu_reset_hook = sabrelite_reset_secondary;
+
+    if (!qtest_enabled()) {
+        arm_load_kernel(&s->soc.cpu[0], machine, &s->bootinfo);
+    }
+}
+
+static void sabrelite_machine_instance_init(Object *obj)
+{
+    SabreliteMachineState *s = SABRELITE_MACHINE(obj);
+
+    object_property_add_link(obj, "canbus0", TYPE_CAN_BUS,
+                             (Object **)&s->canbus[0],
+                             object_property_allow_set_link,
+                             0);
+
+    object_property_add_link(obj, "canbus1", TYPE_CAN_BUS,
+                             (Object **)&s->canbus[1],
+                             object_property_allow_set_link,
+                             0);
+}
+
+static void sabrelite_machine_class_init(ObjectClass *oc, const void *data)
+{
+    MachineClass *mc = MACHINE_CLASS(oc);
+
+    mc->desc = "Freescale i.MX6 Quad SABRE Lite Board (Cortex-A9)";
+    mc->init = sabrelite_init;
+    mc->max_cpus = FSL_IMX6_NUM_CPUS;
+    mc->ignore_memory_transaction_failures = true;
+    mc->default_ram_id = "sabrelite.ram";
+    mc->auto_create_sdcard = true;
+}
+
+static const TypeInfo sabrelite_machine_init_typeinfo = {
+    .name          = TYPE_SABRELITE_MACHINE,
+    .parent        = TYPE_MACHINE,
+    .class_init    = sabrelite_machine_class_init,
+    .instance_init = sabrelite_machine_instance_init,
+    .instance_size = sizeof(SabreliteMachineState),
+    .abstract      = false,
+};
+
+static void sabrelite_machine_init_register_types(void)
+{
+    type_register_static(&sabrelite_machine_init_typeinfo);
+}
+
+type_init(sabrelite_machine_init_register_types)

@@ -1,0 +1,18 @@
+# Build trees
+qemu/build/
+qemu/build-*/
+reims-vgpu/target/
+
+# Fetched or host-supplied artifacts — none of this is redistributable,
+# and the Apple firmware and macOS image must never reach git.
+images/
+
+# Scratch from a run
+serial.txt
+serial.sock
+qmp.sock
+vm.log
+
+# QEMU ships an SSH test fixture (tests/keys/id_rsa) that secret scanning
+# blocks on push. Nothing here builds or runs it.
+qemu/tests/keys/

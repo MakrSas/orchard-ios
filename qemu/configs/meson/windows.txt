@@ -1,0 +1,8 @@
+# target-specific defaults, can still be overridden on
+# the command line
+
+[built-in options]
+bindir = ''
+
+[project options]
+qemu_suffix = ''

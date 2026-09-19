@@ -1,0 +1,32 @@
+.. _internal-subsystem:
+
+Internal Subsystem Information
+------------------------------
+
+Details about QEMU's various subsystems including how to add features to them.
+
+.. toctree::
+   :maxdepth: 2
+
+   qom
+   atomics
+   rcu
+   block-coroutine-wrapper
+   clocks
+   ebpf_rss
+   hexagon-sys
+   hexagon-l2vic
+   migration/index
+   multi-process
+   reset
+   s390-cpu-topology
+   s390-dasd-ipl
+   ssi
+   tracing
+   uefi-vars
+   vfio-iommufd
+   vfio-mdpy
+   writing-monitor-commands
+   virtio-backends
+   crypto
+   multiple-iothreads

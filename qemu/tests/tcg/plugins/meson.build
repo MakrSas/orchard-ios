@@ -1,0 +1,31 @@
+test_plugins_src = [
+'bb.c',
+'discons.c',
+'empty.c',
+'inline.c',
+'insn.c',
+'mem.c',
+'patch.c',
+'registers.c',
+'reset.c',
+'setpc.c',
+'syscall.c',
+]
+
+t = []
+if get_option('plugins')
+  foreach i : test_plugins_src
+    name = fs.stem(i)
+    plugin = shared_module(name, files(i),
+                           dependencies: plugins_deps)
+    t += plugin
+    test_plugins += {name: plugin}
+  endforeach
+endif
+if t.length() > 0
+  alias_target('test-plugins', t)
+else
+  run_target('test-plugins', command: [python, '-c', ''])
+endif
+
+plugin_modules += t

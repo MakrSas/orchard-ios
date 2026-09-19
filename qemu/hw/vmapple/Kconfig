@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+config VMAPPLE_AES
+    bool
+
+config VMAPPLE_BDIF
+    bool
+
+config VMAPPLE_CFG
+    bool
+
+config VMAPPLE_VIRTIO_BLK
+    bool
+
+config VMAPPLE
+    bool
+    depends on ARM
+    # No HVF dependency: this tree runs the machine under TCG on a Linux host,
+    # which is the whole point of it. Upstream gates on HVF because its own
+    # vmapple support assumes a macOS host virtualising Apple silicon natively.
+    default y if ARM
+    imply PCI_DEVICES
+    select ARM_GICV3
+    select PLATFORM_BUS
+    select PCI_EXPRESS
+    select PCI_EXPRESS_GENERIC_BRIDGE
+    select PL011 # UART
+    select PL031 # RTC
+    select PL061 # GPIO
+    select GPIO_PWR
+    select PVPANIC_MMIO
+    select VMAPPLE_AES
+    select VMAPPLE_BDIF
+    select VMAPPLE_CFG
+    select REIMS_VGPU
+    select VMAPPLE_VIRTIO_BLK

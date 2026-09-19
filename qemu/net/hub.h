@@ -1,0 +1,26 @@
+/*
+ * Hub net client
+ *
+ * Copyright IBM, Corp. 2012
+ *
+ * Authors:
+ *  Stefan Hajnoczi   <stefanha@linux.vnet.ibm.com>
+ *  Zhi Yong Wu       <wuzhy@linux.vnet.ibm.com>
+ *
+ * This work is licensed under the terms of the GNU LGPL, version 2 or later.
+ * See the COPYING.LIB file in the top-level directory.
+ *
+ */
+
+#ifndef NET_HUB_H
+#define NET_HUB_H
+
+#include "qapi/qapi-types-net.h"
+
+NetClientState *net_hub_add_port(int hub_id, const char *name,
+                                 NetClientState *hubpeer);
+void net_hub_check_clients(void);
+bool net_hub_flush(NetClientState *nc);
+NetHubInfoList *net_hub_query_info(void);
+
+#endif /* NET_HUB_H */

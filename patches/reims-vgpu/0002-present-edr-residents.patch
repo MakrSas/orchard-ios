@@ -1,0 +1,85 @@
+Subject: [PATCH] present an EDR (half-float) resident instead of refusing it
+
+macOS composites its desktop into an `R16G16B16A16_SFLOAT` framebuffer on this
+platform. The window's present gate required BGRA byte order, so it refused that
+resident and fell back to gathering the frame from the plane's guest pages --
+which the resident rail deliberately never writes.
+
+Measured with the strict gate: `direct_frac=0.00` for an entire boot, and
+`window_publish ... fresh=0 no_frame=238`, i.e. the guest renders and nothing
+reaches the screen.
+
+Channel order only has to match for a path that copies bytes. The present blits,
+and `cmd_blit_image` converts between colour formats and maps components by
+meaning rather than byte position, so a non-BGRA resident is still presentable.
+Formats outside the two float families still decline.
+
+---
+diff --git a/crates/reims-vgpu-vulkan/src/pixel.rs b/crates/reims-vgpu-vulkan/src/pixel.rs
+index eb165ef..404fa90 100644
+--- a/crates/reims-vgpu-vulkan/src/pixel.rs
++++ b/crates/reims-vgpu-vulkan/src/pixel.rs
+@@ -682,6 +682,22 @@ pub fn has_bgra_order(format: vk::Format) -> bool {
+     matches!(texel_layout_of(format), Some(TexelLayout::Bgra8))
+ }
+ 
++/// Whether `format` is the RGBA half-float family.
++///
++/// Asked by the window's present gate, which used to require BGRA byte order.
++/// It does not have to: the present blits, and `cmd_blit_image` converts between
++/// colour formats and maps components by meaning rather than byte position. The
++/// format that made this necessary is the one macOS composites its desktop into
++/// on this platform -- an EDR `R16G16B16A16_SFLOAT` scanout, refused by the byte
++/// order rule and then never presented from the resident at all.
++#[must_use]
++pub fn is_rgba_float(format: vk::Format) -> bool {
++    matches!(
++        format,
++        vk::Format::R16G16B16A16_SFLOAT | vk::Format::R32G32B32A32_SFLOAT
++    )
++}
++
+ /// Every Vulkan format a colour attachment may take, and the decline for a
+ /// format the rail does not render to.
+ ///
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/pools/mod.rs b/crates/reims-vgpu/src/backend/vulkan/engine/pools/mod.rs
+index 3ff3ce3..d7e70b2 100644
+--- a/crates/reims-vgpu/src/backend/vulkan/engine/pools/mod.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/engine/pools/mod.rs
+@@ -1813,7 +1813,21 @@ pub(crate) fn slot_present_decline(
+     if !slot.content_ready {
+         return Some(ResidentPresentDecline::ContentNotReady);
+     }
+-    if !slot.scanout_order() {
++    // Channel order only has to match for a path that copies bytes. The window
++    // presents with `cmd_blit_image`, which converts between colour formats and
++    // maps components by meaning (R to R, not by byte position), so a resident
++    // that is not in BGRA byte order is still presentable.
++    //
++    // This matters because macOS composites the desktop into an EDR framebuffer:
++    // the refused resident is `R16G16B16A16_SFLOAT` at the full 1920x1080. With
++    // the strict gate the window never took a resident at all (`direct_frac=0.00`
++    // for an entire boot) and fell back to gathering the frame from the plane's
++    // guest pages -- which the resident rail deliberately never writes. That is
++    // the stale-row striping: the display was reading a buffer nothing updates.
++    //
++    // Formats outside these two families still decline, because nothing has
++    // shown the blit does the right thing for them.
++    if !slot.scanout_order() && !translate::pixel::is_rgba_float(slot.format.declared()) {
+         return Some(ResidentPresentDecline::ScanoutOrder);
+     }
+     if slot.width != width || slot.height != height {
+diff --git a/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs b/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
+index e3e8f3f..17a80c4 100644
+--- a/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
+@@ -36,7 +36,8 @@ use crate::backend::vulkan::engine::{ColorAttachmentState, ColorClearValue, Stor
+ use crate::protocol::pixel_format::{self, SampledByteFormat, SwizzlePlan, TexelLayout};
+ 
+ pub use rail::{
+-    bytes_per_texel, has_bgra_order, has_identity_components, is_srgb, resident_color,
++    bytes_per_texel, has_bgra_order, has_identity_components, is_rgba_float, is_srgb,
++    resident_color,
+     sample_view_format, srgb_texel_layout, storage_format, storage_image_components,
+     storage_image_from_selector, stored_bytes_agree, texel_layout_of, verbatim_texel,
+     vk_block_geometry, vk_component_mapping, vk_storage_image, vk_texel_layout, PixelFormat,

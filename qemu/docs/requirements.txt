@@ -1,0 +1,5 @@
+# Used by readthedocs.io
+# Should be in sync with the "installed" key of pythondeps.toml
+
+sphinx==7.2.6
+sphinx_rtd_theme==2.0.0

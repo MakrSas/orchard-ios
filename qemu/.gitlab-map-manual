@@ -1,0 +1,18 @@
+# This GitLab map associates GitLab account handles
+# with real names, in order to allow mapping from
+# MAINTAINERS entries. The format of entries is
+#
+#    {gitlab-handle}<tab>{real name}
+#
+# This file is manually written, to augment the
+# auto-generated data in .gitlab-map-auto. This
+# is needed where a GitLab account real name does
+# not exactly match the MAINTAINERS file real
+# name.
+#
+berrange	Daniel P. Berrange
+dgibson	David Gibson
+hreitz	Hanna Reitz
+mstredhat	Michael S. Tsirkin
+npiggin	Nicholas Piggin
+mediouni-m	Mohamed Mediouni

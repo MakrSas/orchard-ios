@@ -1,0 +1,285 @@
+/*
+ * QEMU Audio subsystem header
+ *
+ * Copyright (c) 2003-2005 Vassili Karpov (malc)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+#ifndef QEMU_AUDIO_INT_H
+#define QEMU_AUDIO_INT_H
+
+#ifdef CONFIG_AUDIO_COREAUDIO
+#define FLOAT_MIXENG
+/* #define RECIPROCAL */
+#endif
+#include "qemu/audio.h"
+#include "qemu/audio-capture.h"
+#include "mixeng.h"
+
+struct audio_callback {
+    void *opaque;
+    audio_callback_fn fn;
+};
+
+struct audio_pcm_info {
+    AudioFormat af;
+    int freq;
+    int nchannels;
+    int bytes_per_frame;
+    int bytes_per_second;
+    int swap_endianness;
+};
+
+typedef struct AudioMixengBackend AudioMixengBackend;
+typedef struct SWVoiceCap SWVoiceCap;
+
+typedef struct STSampleBuffer {
+    size_t pos, size;
+    st_sample *buffer;
+} STSampleBuffer;
+
+typedef struct HWVoiceOut {
+    AudioMixengBackend *s;
+    bool enabled;
+    int poll_mode;
+    bool pending_disable;
+    struct audio_pcm_info info;
+
+    f_sample *clip;
+
+    STSampleBuffer mix_buf;
+    void *buf_emul;
+    size_t pos_emul, pending_emul, size_emul;
+
+    size_t samples;
+    QLIST_HEAD (sw_out_listhead, SWVoiceOut) sw_head;
+    QLIST_HEAD (sw_cap_listhead, SWVoiceCap) cap_head;
+    QLIST_ENTRY (HWVoiceOut) entries;
+} HWVoiceOut;
+
+typedef struct HWVoiceIn {
+    AudioMixengBackend *s;
+    bool enabled;
+    int poll_mode;
+    struct audio_pcm_info info;
+
+    t_sample *conv;
+
+    size_t total_samples_captured;
+
+    STSampleBuffer conv_buf;
+    void *buf_emul;
+    size_t pos_emul, pending_emul, size_emul;
+
+    size_t samples;
+    QLIST_HEAD (sw_in_listhead, SWVoiceIn) sw_head;
+    QLIST_ENTRY (HWVoiceIn) entries;
+} HWVoiceIn;
+
+struct SWVoiceOut {
+    AudioMixengBackend *s;
+    struct audio_pcm_info info;
+    t_sample *conv;
+    STSampleBuffer resample_buf;
+    void *rate;
+    size_t total_hw_samples_mixed;
+    bool active;
+    bool empty;
+    HWVoiceOut *hw;
+    char *name;
+    struct mixeng_volume vol;
+    struct audio_callback callback;
+    QLIST_ENTRY (SWVoiceOut) entries;
+};
+
+struct SWVoiceIn {
+    AudioMixengBackend *s;
+    bool active;
+    struct audio_pcm_info info;
+    void *rate;
+    size_t total_hw_samples_acquired;
+    STSampleBuffer resample_buf;
+    f_sample *clip;
+    HWVoiceIn *hw;
+    char *name;
+    struct mixeng_volume vol;
+    struct audio_callback callback;
+    QLIST_ENTRY (SWVoiceIn) entries;
+};
+
+audsettings audiodev_to_audsettings(AudiodevPerDirectionOptions *pdo);
+int audioformat_bytes_per_sample(AudioFormat fmt);
+int audio_buffer_frames(AudiodevPerDirectionOptions *pdo,
+                        audsettings *as, int def_usecs);
+int audio_buffer_samples(AudiodevPerDirectionOptions *pdo,
+                         audsettings *as, int def_usecs);
+int audio_buffer_bytes(AudiodevPerDirectionOptions *pdo,
+                       audsettings *as, int def_usecs);
+
+static inline void *advance(void *p, size_t incr)
+{
+    return (uint8_t *)p + incr;
+}
+
+int wav_start_capture(AudioBackend *state, CaptureState *s, const char *path,
+                      int freq, int bits, int nchannels);
+
+void audio_generic_initialize_buffer_in(HWVoiceIn *hw);
+void audio_generic_run_buffer_in(HWVoiceIn *hw);
+void *audio_generic_get_buffer_in(HWVoiceIn *hw, size_t *size);
+void audio_generic_put_buffer_in(HWVoiceIn *hw, void *buf, size_t size);
+void audio_generic_initialize_buffer_out(HWVoiceOut *hw);
+void audio_generic_run_buffer_out(HWVoiceOut *hw);
+size_t audio_generic_buffer_get_free(HWVoiceOut *hw);
+void *audio_generic_get_buffer_out(HWVoiceOut *hw, size_t *size);
+size_t audio_generic_put_buffer_out(HWVoiceOut *hw, void *buf, size_t size);
+size_t audio_generic_write(HWVoiceOut *hw, void *buf, size_t size);
+size_t audio_generic_read(HWVoiceIn *hw, void *buf, size_t size);
+
+struct capture_callback {
+    struct audio_capture_ops ops;
+    void *opaque;
+    QLIST_ENTRY (capture_callback) entries;
+};
+
+struct CaptureVoiceOut {
+    HWVoiceOut hw;
+    void *buf;
+    QLIST_HEAD (cb_listhead, capture_callback) cb_head;
+    QLIST_ENTRY (CaptureVoiceOut) entries;
+};
+
+struct SWVoiceCap {
+    SWVoiceOut sw;
+    CaptureVoiceOut *cap;
+    QLIST_ENTRY (SWVoiceCap) entries;
+};
+
+struct AudioMixengBackendClass {
+    AudioBackendClass parent_class;
+
+    int max_voices_out;
+    int max_voices_in;
+    size_t voice_size_out;
+    size_t voice_size_in;
+
+    int    (*init_out)(HWVoiceOut *hw, audsettings *as);
+    void   (*fini_out)(HWVoiceOut *hw);
+    size_t (*write)   (HWVoiceOut *hw, void *buf, size_t size);
+    void   (*run_buffer_out)(HWVoiceOut *hw);
+    /*
+     * Get the free output buffer size. This is an upper limit. The size
+     * returned by function get_buffer_out may be smaller.
+     */
+    size_t (*buffer_get_free)(HWVoiceOut *hw);
+    /*
+     * get a buffer that after later can be passed to put_buffer_out; optional
+     * returns the buffer, and writes it's size to size (in bytes)
+     */
+    void  *(*get_buffer_out)(HWVoiceOut *hw, size_t *size);
+    /*
+     * put back the buffer returned by get_buffer_out; optional
+     * buf must be equal the pointer returned by get_buffer_out,
+     * size may be smaller
+     */
+    size_t (*put_buffer_out)(HWVoiceOut *hw, void *buf, size_t size);
+    void   (*enable_out)(HWVoiceOut *hw, bool enable);
+    void   (*volume_out)(HWVoiceOut *hw, Volume *vol);
+
+    int    (*init_in) (HWVoiceIn *hw, audsettings *as);
+    void   (*fini_in) (HWVoiceIn *hw);
+    size_t (*read)    (HWVoiceIn *hw, void *buf, size_t size);
+    void   (*run_buffer_in)(HWVoiceIn *hw);
+    void  *(*get_buffer_in)(HWVoiceIn *hw, size_t *size);
+    void   (*put_buffer_in)(HWVoiceIn *hw, void *buf, size_t size);
+    void   (*enable_in)(HWVoiceIn *hw, bool enable);
+    void   (*volume_in)(HWVoiceIn *hw, Volume *vol);
+};
+
+struct AudioMixengBackend {
+    AudioBackend parent_obj;
+
+    Audiodev *dev;
+
+    QEMUTimer *ts;
+    GTimer *run_timer;
+    QLIST_HEAD (hw_in_listhead, HWVoiceIn) hw_head_in;
+    QLIST_HEAD (hw_out_listhead, HWVoiceOut) hw_head_out;
+    QLIST_HEAD (cap_listhead, CaptureVoiceOut) cap_head;
+    int nb_hw_voices_out;
+    int nb_hw_voices_in;
+    int64_t period_ticks;
+
+    bool timer_running;
+    uint64_t timer_last;
+    VMChangeStateEntry *vmse;
+};
+
+extern const struct mixeng_volume nominal_volume;
+
+extern const char *audio_prio_list[];
+
+void audio_pcm_init_info (struct audio_pcm_info *info, const struct audsettings *as);
+void audio_pcm_info_clear_buf (struct audio_pcm_info *info, void *buf, int len);
+
+void audio_run(AudioMixengBackend *s, const char *msg);
+
+typedef struct RateCtl {
+    int64_t start_ticks;
+    int64_t bytes_sent;
+    int64_t peeked_frames;
+} RateCtl;
+
+void audio_rate_start(RateCtl *rate);
+size_t audio_rate_peek_bytes(RateCtl *rate, struct audio_pcm_info *info);
+void audio_rate_add_bytes(RateCtl *rate, size_t bytes_used);
+size_t audio_rate_get_bytes(RateCtl *rate, struct audio_pcm_info *info,
+                            size_t bytes_avail);
+
+static inline size_t audio_ring_dist(size_t dst, size_t src, size_t len)
+{
+    return (dst >= src) ? (dst - src) : (len - src + dst);
+}
+
+/**
+ * audio_ring_posb() - returns new position in ringbuffer in backward
+ * direction at given distance
+ *
+ * @pos: current position in ringbuffer
+ * @dist: distance in ringbuffer to walk in reverse direction
+ * @len: size of ringbuffer
+ */
+static inline size_t audio_ring_posb(size_t pos, size_t dist, size_t len)
+{
+    return pos >= dist ? pos - dist : len - dist + pos;
+}
+
+AudiodevPerDirectionOptions *audio_get_pdo_in(Audiodev *dev);
+AudiodevPerDirectionOptions *audio_get_pdo_out(Audiodev *dev);
+
+void audio_sample_to_uint64(const st_sample *sample, int pos,
+                            uint64_t *left, uint64_t *right);
+void audio_sample_from_uint64(st_sample *sample, int pos,
+                              uint64_t left, uint64_t right);
+
+#define TYPE_AUDIO_MIXENG_BACKEND "audio-mixeng-backend"
+OBJECT_DECLARE_TYPE(AudioMixengBackend, AudioMixengBackendClass, AUDIO_MIXENG_BACKEND)
+
+#endif /* QEMU_AUDIO_INT_H */

@@ -1,0 +1,7 @@
+TARGET_ARCH=s390x
+TARGET_SYSTBL_ABI=common,64
+TARGET_SYSTBL=syscall.tbl
+TARGET_BIG_ENDIAN=y
+TARGET_XML_FILES= s390x-core64.xml s390-acr.xml s390-fpr.xml s390-vx.xml s390-cr.xml s390-virt.xml s390-virt-kvm.xml s390-gs.xml
+TARGET_LONG_BITS=64
+TARGET_NOT_USING_LEGACY_NATIVE_ENDIAN_API=y

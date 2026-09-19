@@ -1,0 +1,149 @@
+# THIS FILE WAS AUTO-GENERATED
+#
+#  $ lcitool dockerfile --layers all centos-stream-9 qemu
+#
+# https://gitlab.com/libvirt/libvirt-ci
+
+FROM quay.io/centos/centos:stream9
+
+RUN dnf --quiet distro-sync -y && \
+    dnf --quiet install 'dnf-command(config-manager)' -y && \
+    dnf --quiet config-manager --set-enabled -y crb && \
+    dnf --quiet install -y epel-release && \
+    dnf --quiet install -y epel-next-release && \
+    dnf --quiet install -y \
+                SDL2-devel \
+                alsa-lib-devel \
+                bash \
+                bc \
+                bindgen-cli \
+                bison \
+                brlapi-devel \
+                bzip2 \
+                bzip2-devel \
+                ca-certificates \
+                capstone-devel \
+                ccache \
+                clang \
+                compiler-rt \
+                coreutils-single \
+                ctags \
+                cyrus-sasl-devel \
+                daxctl-devel \
+                dbus-daemon \
+                device-mapper-multipath-devel \
+                diffutils \
+                findutils \
+                flex \
+                fuse3-devel \
+                gcc \
+                gettext \
+                git \
+                glib2-devel \
+                glib2-static \
+                glibc-langpack-en \
+                glibc-static \
+                gnutls-devel \
+                gtk3-devel \
+                hostname \
+                jemalloc-devel \
+                json-c-devel \
+                libaio-devel \
+                libasan \
+                libattr-devel \
+                libbpf-devel \
+                libcacard-devel \
+                libcap-ng-devel \
+                libcmocka-devel \
+                libcurl-devel \
+                libdrm-devel \
+                libepoxy-devel \
+                libfdt-devel \
+                libffi-devel \
+                libgcrypt-devel \
+                libiscsi-devel \
+                libjpeg-devel \
+                libnfs-devel \
+                libpmem-devel \
+                libpng-devel \
+                librbd-devel \
+                libseccomp-devel \
+                libselinux-devel \
+                libslirp-devel \
+                libssh-devel \
+                libtasn1-devel \
+                libubsan \
+                liburing-devel \
+                libusbx-devel \
+                libxdp-devel \
+                libzstd-devel \
+                llvm \
+                lttng-ust-devel \
+                lzo-devel \
+                make \
+                mesa-libgbm-devel \
+                meson \
+                mtools \
+                ncurses-devel \
+                nettle-devel \
+                ninja-build \
+                numactl-devel \
+                openssh-clients \
+                pam-devel \
+                pcre-static \
+                pipewire-devel \
+                pixman-devel \
+                pkgconfig \
+                pulseaudio-libs-devel \
+                python3-tomli \
+                python3.12 \
+                python3.12-pip \
+                python3.12-setuptools \
+                python3.12-wheel \
+                rdma-core-devel \
+                rust \
+                rust-std-static \
+                sed \
+                snappy-devel \
+                socat \
+                spice-protocol \
+                swtpm \
+                systemd-devel \
+                systemtap-sdt-devel \
+                tar \
+                usbredir-devel \
+                util-linux \
+                vte291-devel \
+                vulkan-tools \
+                which \
+                xorriso \
+                zlib-devel \
+                zlib-static \
+                zstd && \
+    dnf --quiet autoremove -y && \
+    dnf --quiet clean all -y && \
+    rm -f /usr/lib*/python3*/EXTERNALLY-MANAGED && \
+    rpm -qa | sort > /packages.txt && \
+    mkdir -p /usr/libexec/ccache-wrappers && \
+    ln -s /usr/bin/ccache /usr/libexec/ccache-wrappers/cc && \
+    ln -s /usr/bin/ccache /usr/libexec/ccache-wrappers/clang && \
+    ln -s /usr/bin/ccache /usr/libexec/ccache-wrappers/gcc
+
+RUN /usr/bin/pip3.12 install \
+                     numpy \
+                     opencv-python \
+                     sphinx \
+                     sphinx-rtd-theme
+
+ENV CCACHE_WRAPPERSDIR="/usr/libexec/ccache-wrappers"
+ENV LANG="en_US.UTF-8"
+ENV MAKE="/usr/bin/make"
+ENV NINJA="/usr/bin/ninja"
+ENV PYTHON="/usr/bin/python3.12"
+# As a final step configure the user (if env is defined)
+ARG USER
+ARG UID
+RUN if [ "${USER}" ]; then \
+  id ${USER} 2>/dev/null || useradd -u ${UID} -U ${USER}; fi
+
+ENV ENABLE_RUST=1

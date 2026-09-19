@@ -1,0 +1,22 @@
+/packagecache
+
+/berkeley-softfloat-3
+/berkeley-testfloat-3
+/dtc
+/keycodemapdb
+/libvfio-user
+/slirp
+/anyhow-*
+/attrs-*
+/bitfield-struct-*
+/foreign-*
+/glib-sys-*
+/libc-*
+/probe-*
+/proc-macro*
+/quote-*
+/syn-*
+/unicode-ident-*
+
+# Workaround for Meson v1.9.0 https://github.com/mesonbuild/meson/issues/14948
+/.wraplock

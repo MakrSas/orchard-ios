@@ -1,0 +1,4 @@
+[wrap-git]
+url = https://gitlab.com/qemu-project/libvfio-user.git
+revision = 4d9f663450fa80ff375612dbbafe073700e3d3d8
+depth = 1

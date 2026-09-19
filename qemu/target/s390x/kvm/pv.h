@@ -1,0 +1,46 @@
+/*
+ * Protected Virtualization header
+ *
+ * Copyright IBM Corp. 2020
+ * Author(s):
+ *  Janosch Frank <frankja@linux.ibm.com>
+ *
+ * This work is licensed under the terms of the GNU GPL, version 2 or (at
+ * your option) any later version. See the COPYING file in the top-level
+ * directory.
+ */
+#ifndef HW_S390_PV_H
+#define HW_S390_PV_H
+
+#include "hw/s390x/s390-virtio-ccw.h"
+
+struct S390PVResponse {
+    uint16_t cmd;
+    uint16_t rrc;
+    uint16_t rc;
+};
+
+bool s390_is_pv(void);
+int s390_pv_query_info(void);
+int s390_pv_vm_enable(void);
+void s390_pv_vm_disable(void);
+bool s390_pv_vm_try_disable_async(S390CcwMachineState *ms);
+int s390_pv_set_sec_parms(uint64_t origin, uint64_t length,
+                          struct S390PVResponse *pv_resp, Error **errp);
+int s390_pv_unpack(uint64_t addr, uint64_t size, uint64_t tweak,
+                   struct S390PVResponse *pv_resp);
+void s390_pv_prep_reset(void);
+int s390_pv_verify(struct S390PVResponse *pv_resp);
+void s390_pv_unshare(void);
+void s390_pv_inject_reset_error(CPUState *cs,
+                                struct S390PVResponse pv_resp);
+uint64_t kvm_s390_pv_dmp_get_size_cpu(void);
+uint64_t kvm_s390_pv_dmp_get_size_mem_state(void);
+uint64_t kvm_s390_pv_dmp_get_size_completion_data(void);
+bool kvm_s390_pv_info_basic_valid(void);
+int kvm_s390_dump_init(void);
+int kvm_s390_dump_cpu(S390CPU *cpu, void *buff);
+int kvm_s390_dump_mem_state(uint64_t addr, size_t len, void *dest);
+int kvm_s390_dump_completion_data(void *buff);
+
+#endif /* HW_S390_PV_H */

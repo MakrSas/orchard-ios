@@ -1,0 +1,66 @@
+#
+# Docker Hexagon cross-compiler target
+#
+# This docker target is used for building hexagon tests. As it also
+# needs to be able to build QEMU itself in CI we include its
+# build-deps.
+#
+FROM docker.io/library/debian:13-slim
+
+# Add deb-src repository sources
+RUN sed -i "s/^Types: deb$/Types: deb deb-src/" \
+    /etc/apt/sources.list.d/debian.sources
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt install -yy eatmydata && \
+    DEBIAN_FRONTEND=noninteractive eatmydata \
+# Install common build utilities
+    apt-get install -y --no-install-recommends \
+        curl \
+        wget \
+        gnupg \
+        lsb-release \
+        ccache \
+        xz-utils \
+        zstd \
+        ca-certificates \
+        bison \
+        flex \
+        git \
+        ninja-build \
+        python3-pip \
+        python3-setuptools \
+        python3-tomli \
+        python3-venv \
+        python3-wheel && \
+# Install QEMU build deps for use in CI
+    DEBIAN_FRONTEND=noninteractive eatmydata \
+    apt build-dep -yy --arch-only qemu && \
+    mkdir -p /usr/libexec/ccache-wrappers && \
+    ln -s /usr/bin/ccache /usr/libexec/ccache-wrappers/c++ && \
+    ln -s /usr/bin/ccache /usr/libexec/ccache-wrappers/cc && \
+    ln -s /usr/bin/ccache /usr/libexec/ccache-wrappers/g++ && \
+    ln -s /usr/bin/ccache /usr/libexec/ccache-wrappers/gcc && \
+    dpkg-query --showformat '${Package}_${Version}_${Architecture}\n' --show > /packages.txt
+
+ENV LLVM_VERSION=22
+ENV TOOLCHAIN_RELEASE=22.1.8
+ENV TOOLCHAIN_URL=https://artifacts.codelinaro.org/artifactory/codelinaro-toolchain-for-hexagon/${TOOLCHAIN_RELEASE}________/hexagon-debs-${TOOLCHAIN_RELEASE}________.tar.gz
+ENV CCACHE_WRAPPERSDIR=/usr/libexec/ccache-wrappers
+ENV MAKE=/usr/bin/make
+
+RUN curl -#SL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh && \
+    chmod +x /tmp/llvm.sh && \
+    DEBIAN_FRONTEND=noninteractive eatmydata /tmp/llvm.sh ${LLVM_VERSION} && \
+    rm -f /tmp/llvm.sh && \
+    mkdir -p /tmp/hexagon-debs && \
+    curl -#SL "$TOOLCHAIN_URL" | tar -xzC /tmp/hexagon-debs && \
+    DEBIAN_FRONTEND=noninteractive eatmydata \
+    apt-get install -y /tmp/hexagon-debs/*.deb && \
+    rm -rf /tmp/hexagon-debs
+
+# As a final step configure the user (if env is defined)
+ARG USER
+ARG UID
+RUN if [ "${USER}" ]; then \
+  id ${USER} 2>/dev/null || useradd -u ${UID} -U ${USER}; fi

@@ -1,0 +1,126 @@
+/*
+ * QEMU live migration via generic fd
+ *
+ * Copyright Red Hat, Inc. 2009-2016
+ *
+ * Authors:
+ *  Chris Lalancette <clalance@redhat.com>
+ *  Daniel P. Berrange <berrange@redhat.com>
+ *
+ * This work is licensed under the terms of the GNU GPL, version 2.  See
+ * the COPYING file in the top-level directory.
+ *
+ * Contributions after 2012-01-13 are licensed under the terms of the
+ * GNU GPL, version 2 or (at your option) any later version.
+ */
+
+#include "qemu/osdep.h"
+#include "channel.h"
+#include "fd.h"
+#include "file.h"
+#include "migration.h"
+#include "monitor/monitor.h"
+#include "qemu/error-report.h"
+#include "qemu/sockets.h"
+#include "io/channel-util.h"
+#include "trace.h"
+#include "qapi/error.h"
+
+static bool fd_is_pipe(int fd)
+{
+    struct stat statbuf;
+
+    if (fstat(fd, &statbuf) == -1) {
+        return false;
+    }
+
+    return S_ISFIFO(statbuf.st_mode);
+}
+
+static bool migration_fd_valid(int fd, Error **errp)
+{
+    if (migrate_local() && migrate_mode() != MIG_MODE_CPR_EXEC) {
+        struct sockaddr_storage ss;
+        socklen_t sslen = sizeof(ss);
+
+        if (getsockname(fd, (struct sockaddr *)&ss, &sslen) < 0 ||
+            ss.ss_family != AF_UNIX) {
+            error_setg(errp,
+                       "local migration requires a UNIX domain socket channel");
+            return false;
+        }
+
+        return true;
+    }
+
+    if (fd_is_socket(fd) || fd_is_pipe(fd)) {
+        return true;
+    }
+
+    error_setg(errp, "fd: migration to a file is not supported."
+               " Use file: instead.");
+    return false;
+}
+
+QIOChannel *fd_connect_outgoing(MigrationState *s, const char *fdname,
+                                Error **errp)
+{
+    QIOChannel *ioc = NULL;
+    int fd = monitor_get_fd(monitor_cur(), fdname, errp);
+    if (fd == -1) {
+        goto out;
+    }
+
+    if (!migration_fd_valid(fd, errp)) {
+        close(fd);
+        goto out;
+    }
+
+    trace_migration_fd_outgoing(fd);
+    ioc = qio_channel_new_fd(fd, errp);
+    if (!ioc) {
+        close(fd);
+        goto out;
+    }
+
+    qio_channel_set_name(ioc, "migration-fd-outgoing");
+out:
+    return ioc;
+}
+
+static gboolean fd_accept_incoming_migration(QIOChannel *ioc,
+                                             GIOCondition condition,
+                                             gpointer opaque)
+{
+    migration_channel_process_incoming(ioc);
+    object_unref(OBJECT(ioc));
+    return G_SOURCE_REMOVE;
+}
+
+void fd_connect_incoming(const char *fdname, Error **errp)
+{
+    QIOChannel *ioc;
+    int fd = monitor_fd_param(monitor_cur(), fdname, errp);
+    if (fd == -1) {
+        return;
+    }
+
+    if (!migration_fd_valid(fd, errp)) {
+        close(fd);
+        return;
+    }
+
+    trace_migration_fd_incoming(fd);
+
+    ioc = qio_channel_new_fd(fd, errp);
+    if (!ioc) {
+        close(fd);
+        return;
+    }
+
+    qio_channel_set_name(ioc, "migration-fd-incoming");
+    qio_channel_add_watch_full(ioc, G_IO_IN,
+                               fd_accept_incoming_migration,
+                               NULL, NULL,
+                               g_main_context_get_thread_default());
+}

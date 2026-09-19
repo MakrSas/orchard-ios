@@ -1,0 +1,443 @@
+/*
+ * QEMU float support
+ *
+ * The code in this source file is derived from release 2a of the SoftFloat
+ * IEC/IEEE Floating-point Arithmetic Package. Those parts of the code (and
+ * some later contributions) are provided under that license, as detailed below.
+ * It has subsequently been modified by contributors to the QEMU Project,
+ * so some portions are provided under:
+ *  the SoftFloat-2a license
+ *  the BSD license
+ *  GPL-v2-or-later
+ *
+ * Any future contributions to this file after December 1st 2014 will be
+ * taken to be licensed under the Softfloat-2a license unless specifically
+ * indicated otherwise.
+ */
+
+/*
+===============================================================================
+This C source fragment is part of the SoftFloat IEC/IEEE Floating-point
+Arithmetic Package, Release 2a.
+
+Written by John R. Hauser.  This work was made possible in part by the
+International Computer Science Institute, located at Suite 600, 1947 Center
+Street, Berkeley, California 94704.  Funding was partially provided by the
+National Science Foundation under grant MIP-9311980.  The original version
+of this code was written as part of a project to build a fixed-point vector
+processor in collaboration with the University of California at Berkeley,
+overseen by Profs. Nelson Morgan and John Wawrzynek.  More information
+is available through the Web page `http://HTTP.CS.Berkeley.EDU/~jhauser/
+arithmetic/SoftFloat.html'.
+
+THIS SOFTWARE IS DISTRIBUTED AS IS, FOR FREE.  Although reasonable effort
+has been made to avoid it, THIS SOFTWARE MAY CONTAIN FAULTS THAT WILL AT
+TIMES RESULT IN INCORRECT BEHAVIOR.  USE OF THIS SOFTWARE IS RESTRICTED TO
+PERSONS AND ORGANIZATIONS WHO CAN AND WILL TAKE FULL RESPONSIBILITY FOR ANY
+AND ALL LOSSES, COSTS, OR OTHER PROBLEMS ARISING FROM ITS USE.
+
+Derivative works are acceptable, even for commercial purposes, so long as
+(1) they include prominent notice that the work is derivative, and (2) they
+include prominent notice akin to these four paragraphs for those parts of
+this code that are retained.
+
+===============================================================================
+*/
+
+/* BSD licensing:
+ * Copyright (c) 2006, Fabrice Bellard
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ * this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors
+ * may be used to endorse or promote products derived from this software without
+ * specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/* Portions of this work are licensed under the terms of the GNU GPL,
+ * version 2 or later. See the COPYING file in the top-level directory.
+ */
+
+static inline bool get_tininess_before_rounding(const float_status *status)
+{
+    return status->tininess_before_rounding;
+}
+
+static inline bool get_ftz_before_rounding(const float_status *status)
+{
+    return status->ftz_before_rounding;
+}
+
+static inline uint8_t get_float_default_nan_pattern(const float_status *status)
+{
+    return status->default_nan_pattern;
+}
+
+static inline bool get_float_rebias_overflow(const float_status *status)
+{
+    return status->rebias_overflow;
+}
+
+static inline bool get_float_rebias_underflow(const float_status *status)
+{
+    return status->rebias_underflow;
+}
+
+static inline bool get_float_e4m3_nan_is_snan(const float_status *status)
+{
+    return status->e4m3_nan_is_snan;
+}
+
+/*----------------------------------------------------------------------------
+| For the deconstructed floating-point with fraction FRAC, return true
+| if the fraction represents a signalling NaN; otherwise false.
+*----------------------------------------------------------------------------*/
+
+static bool frac_msb_is_snan(bool msb, float_status *status)
+{
+    switch (get_snan_rule(status)) {
+    case float_snan_never:
+        return false;
+    case float_snan_bit_is_one:
+        return msb;
+    case float_snan_bit_is_zero:
+        return !msb;
+    }
+    g_assert_not_reached();
+}
+
+static bool parts_is_snan_frac(uint64_t frac, float_status *status)
+{
+    bool msb = extract64(frac, DECOMPOSED_BINARY_POINT - 1, 1);
+    return frac_msb_is_snan(msb, status);
+}
+
+/*----------------------------------------------------------------------------
+| The pattern for a default generated deconstructed floating-point NaN.
+*----------------------------------------------------------------------------*/
+
+FloatParts64 parts64_default_nan(float_status *status)
+{
+    bool sign = 0;
+    uint64_t frac;
+    uint8_t dnan_pattern = get_float_default_nan_pattern(status);
+
+    assert(dnan_pattern != 0);
+
+    sign = dnan_pattern >> 7;
+    /*
+     * Place default_nan_pattern [6:0] into bits [62:56],
+     * and replecate bit [0] down into [55:0]
+     */
+    frac = deposit64(0, DECOMPOSED_BINARY_POINT - 7, 7, dnan_pattern);
+    frac = deposit64(frac, 0, DECOMPOSED_BINARY_POINT - 7, -(dnan_pattern & 1));
+
+    return (FloatParts64) {
+        .cls = float_class_qnan,
+        .sign = sign,
+        .exp = INT_MAX,
+        .frac = frac
+    };
+}
+
+FloatParts128 parts128_default_nan(float_status *status)
+{
+    /*
+     * Extrapolate from the choices made by parts64_default_nan to fill
+     * in the quad-floating format.  If the low bit is set, assume we
+     * want to set all non-snan bits.
+     */
+    FloatParts64 p64 = parts64_default_nan(status);
+
+    return (FloatParts128) {
+        .cls = float_class_qnan,
+        .sign = p64.sign,
+        .exp = INT_MAX,
+        .frac_hi = p64.frac,
+        .frac_lo = -(p64.frac & 1)
+    };
+}
+
+/*----------------------------------------------------------------------------
+| Returns a quiet NaN from a signalling NaN for the deconstructed
+| floating-point parts.
+*----------------------------------------------------------------------------*/
+
+static uint64_t parts_silence_nan_frac(uint64_t frac, float_status *status)
+{
+    switch (get_snan_rule(status)) {
+    case float_snan_bit_is_zero:
+        frac |= 1ULL << (DECOMPOSED_BINARY_POINT - 1);
+        break;
+    case float_snan_bit_is_one:
+        /* The only snan_bit_is_one target without default_nan_mode is HPPA. */
+        frac &= ~(1ULL << (DECOMPOSED_BINARY_POINT - 1));
+        frac |= 1ULL << (DECOMPOSED_BINARY_POINT - 2);
+        break;
+    case float_snan_never:
+    default:
+        g_assert_not_reached();
+    }
+    return frac;
+}
+
+static FloatParts64 parts64_silence_nan(const FloatParts64 *p,
+                                        float_status *status)
+{
+    FloatParts64 r = *p;
+
+    r.frac = parts_silence_nan_frac(r.frac, status);
+    r.cls = float_class_qnan;
+    return r;
+}
+
+static FloatParts128 parts128_silence_nan(const FloatParts128 *p,
+                                          float_status *status)
+{
+    FloatParts128 r = *p;
+
+    r.frac_hi = parts_silence_nan_frac(r.frac_hi, status);
+    r.cls = float_class_qnan;
+    return r;
+}
+
+/*----------------------------------------------------------------------------
+| The pattern for a default generated extended double-precision NaN.
+*----------------------------------------------------------------------------*/
+floatx80 floatx80_default_nan(float_status *status)
+{
+    /*
+     * Extrapolate from the choices made by parts64_default_nan to fill
+     * in the floatx80 format. We assume that floatx80's explicit
+     * integer bit is always set (this is true for i386 and m68k,
+     * which are the only real users of this format).
+     */
+    FloatParts64 p64 = parts64_default_nan(status);
+
+    return (floatx80) {
+        .high = 0x7FFF | (p64.sign << 15),
+        .low = (1ULL << DECOMPOSED_BINARY_POINT) | p64.frac,
+    };
+}
+
+/*----------------------------------------------------------------------------
+| The pattern for a default generated extended double-precision inf.
+*----------------------------------------------------------------------------*/
+
+floatx80 floatx80_default_inf(bool zSign, float_status *status)
+{
+    /*
+     * Whether the Integer bit is set in the default Infinity is
+     * target dependent.
+     */
+    bool z = get_floatx80_behaviour(status) & floatx80_default_inf_int_bit_is_zero;
+    return packFloatx80(zSign, 0x7fff, z ? 0 : (1ULL << 63));
+}
+
+/*----------------------------------------------------------------------------
+| Determine if a float16 NaN is signaling NaN.
+*----------------------------------------------------------------------------*/
+
+static bool float16_nan_is_snan(float16 a, float_status *status)
+{
+    return frac_msb_is_snan((a >> 9) & 1, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the half-precision floating-point value `a' is a quiet
+| NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool float16_is_quiet_nan(float16 a_, float_status *status)
+{
+    return float16_is_any_nan(a_) && !float16_nan_is_snan(a_, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the half-precision floating-point value `a' is a signaling
+| NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool float16_is_signaling_nan(float16 a_, float_status *status)
+{
+    return float16_is_any_nan(a_) && float16_nan_is_snan(a_, status);
+}
+
+/*----------------------------------------------------------------------------
+| Determine if a bfloat16 NaN is signaling NaN.
+*----------------------------------------------------------------------------*/
+
+static bool bfloat16_nan_is_snan(bfloat16 a, float_status *status)
+{
+    return frac_msb_is_snan((a >> 6) & 1, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the bfloat16 value `a' is a quiet NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool bfloat16_is_quiet_nan(bfloat16 a_, float_status *status)
+{
+    return bfloat16_is_any_nan(a_) && !bfloat16_nan_is_snan(a_, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the bfloat16 value `a' is a signaling NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool bfloat16_is_signaling_nan(bfloat16 a_, float_status *status)
+{
+    return bfloat16_is_any_nan(a_) && bfloat16_nan_is_snan(a_, status);
+}
+
+/*----------------------------------------------------------------------------
+| Determine if a float32 NaN is signaling NaN.
+*----------------------------------------------------------------------------*/
+
+static bool float32_nan_is_snan(float32 a, float_status *status)
+{
+    return frac_msb_is_snan((a >> 22) & 1, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the single-precision floating-point value `a' is a quiet
+| NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool float32_is_quiet_nan(float32 a_, float_status *status)
+{
+    return float32_is_any_nan(a_) && !float32_nan_is_snan(a_, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the single-precision floating-point value `a' is a signaling
+| NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool float32_is_signaling_nan(float32 a_, float_status *status)
+{
+    return float32_is_any_nan(a_) && float32_nan_is_snan(a_, status);
+}
+
+/*----------------------------------------------------------------------------
+| Determine if a float64 NaN is signaling NaN.
+*----------------------------------------------------------------------------*/
+
+static bool float64_nan_is_snan(float64 a, float_status *status)
+{
+    return frac_msb_is_snan((a >> 51) & 1, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the double-precision floating-point value `a' is a quiet
+| NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool float64_is_quiet_nan(float64 a_, float_status *status)
+{
+    return float64_is_any_nan(a_) && !float64_nan_is_snan(a_, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the double-precision floating-point value `a' is a signaling
+| NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool float64_is_signaling_nan(float64 a_, float_status *status)
+{
+    return float64_is_any_nan(a_) && float64_nan_is_snan(a_, status);
+}
+
+/*----------------------------------------------------------------------------
+| Determine if a floatx80 NaN is signaling NaN.
+| The MSB of frac differs from the same function for other types as floatx80
+| has an explicit bit.
+*----------------------------------------------------------------------------*/
+
+static bool floatx80_nan_is_snan(floatx80 a, float_status *status)
+{
+    return frac_msb_is_snan((a.low >> 62) & 1, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the extended double-precision floating-point value `a' is a
+| quiet NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool floatx80_is_quiet_nan(floatx80 a, float_status *status)
+{
+    return floatx80_is_any_nan(a) && !floatx80_nan_is_snan(a, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the extended double-precision floating-point value `a' is a
+| signaling NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool floatx80_is_signaling_nan(floatx80 a, float_status *status)
+{
+    return floatx80_is_any_nan(a) && floatx80_nan_is_snan(a, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns a quiet NaN from a signalling NaN for the extended double-precision
+| floating point value `a'.
+*----------------------------------------------------------------------------*/
+
+floatx80 floatx80_silence_nan(floatx80 a, float_status *status)
+{
+    /* None of the targets that have snan_bit_is_one use floatx80.  */
+    assert(get_snan_rule(status) == float_snan_bit_is_zero);
+    a.low |= UINT64_C(0xC000000000000000);
+    return a;
+}
+
+/*----------------------------------------------------------------------------
+| Determine if a float128 NaN is signaling NaN.
+*----------------------------------------------------------------------------*/
+
+static bool float128_nan_is_snan(float128 a, float_status *status)
+{
+    return frac_msb_is_snan((a.high >> 47) & 1, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the quadruple-precision floating-point value `a' is a quiet
+| NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool float128_is_quiet_nan(float128 a, float_status *status)
+{
+    return float128_is_any_nan(a) && !float128_nan_is_snan(a, status);
+}
+
+/*----------------------------------------------------------------------------
+| Returns 1 if the quadruple-precision floating-point value `a' is a
+| signaling NaN; otherwise returns 0.
+*----------------------------------------------------------------------------*/
+
+bool float128_is_signaling_nan(float128 a, float_status *status)
+{
+    return float128_is_any_nan(a) && float128_nan_is_snan(a, status);
+}
