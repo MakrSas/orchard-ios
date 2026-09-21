@@ -1,5 +1,7 @@
 # macOS on QEMU, on a Linux host
 
+Video link: https://jumpshare.com/share/xWiBdnqUZPoGVcCptEGG
+
 Boots an **arm64 macOS guest** (Ventura) on **QEMU/TCG on Linux**, through the
 genuine Apple boot chain — `AVPBooter → iBootStage1 (LLB) → iBootStage2 (iBoot)
 → stock XNU` — with a GPU that renders the desktop on the host's Vulkan.
