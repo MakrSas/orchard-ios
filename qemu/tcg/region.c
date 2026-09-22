@@ -30,6 +30,7 @@
 #include "qemu/cacheinfo.h"
 #include "qemu/qtree.h"
 #include "qapi/error.h"
+#include "qemu/error-report.h"
 #include "tcg/tcg.h"
 #include "exec/translation-block.h"
 #include "tcg-internal.h"
@@ -632,14 +633,58 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task,
                                    vm_prot_t *max_protection,
                                    vm_inherit_t inheritance);
 
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+#include <sys/sysctl.h>
+#include <sys/types.h>
+
+/*
+ * iOS 26 and later enforce code signing through the Trusted Execution
+ * Monitor, and a page cannot simply be made executable from inside the
+ * process: the plain RW-then-remap-RX sequence below gets the process killed
+ * outright, with nothing on its console. The sequence used instead is UTM's,
+ * carried here from Inferno-iOS's tcg/region.c: map executable first, mirror
+ * it, then ask the attached debugger to bless the executable view through a
+ * breakpoint it watches for. JIT enablers such as StikDebug implement the
+ * other half.
+ */
+static int is_debugger_attached(void)
+{
+    struct kinfo_proc info;
+    size_t size = sizeof(info);
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+
+    info.kp_proc.p_flag = 0;
+    if (sysctl(mib, 4, &info, &size, NULL, 0) == -1) {
+        return 0;
+    }
+    return (info.kp_proc.p_flag & P_TRACED) != 0;
+}
+
+static void break_prepare_jit_region(mach_vm_address_t addr, size_t len)
+{
+    asm("mov x0, %0\n"
+        "mov x1, %1\n"
+        "brk #0x69" :: "r"(addr), "r"(len) : "x0", "x1");
+}
+#endif
+
 static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
 {
     kern_return_t ret;
     mach_vm_address_t buf_rw, buf_rx;
     vm_prot_t cur_prot, max_prot;
+    int orig_prot = PROT_READ | PROT_WRITE;
+
+#if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+    /* Under TXM the first mapping has to start out executable. */
+    if (__builtin_available(iOS 26, *)) {
+        orig_prot = PROT_READ | PROT_EXEC;
+    }
+#endif
 
     /* Map the read-write portion via normal anon memory. */
-    if (!alloc_code_gen_buffer_anon(size, PROT_READ | PROT_WRITE,
+    if (!alloc_code_gen_buffer_anon(size, orig_prot,
                                     MAP_PRIVATE | MAP_ANONYMOUS, errp)) {
         return -1;
     }
@@ -670,6 +715,34 @@ static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
         munmap((void *)buf_rw, size);
         return -1;
     }
+
+#if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+    if (__builtin_available(iOS 26, *)) {
+        /*
+         * Hand the executable mapping to the debugger to bless. Said out loud
+         * both ways: an unblessed buffer does not fail, the machine just
+         * stands on the first instruction it translates, which looks like a
+         * hang anywhere else.
+         */
+        if (is_debugger_attached()) {
+            info_report("JIT: asking the debugger to bless %zu bytes at %p",
+                        size, (void *)buf_rx);
+            break_prepare_jit_region(buf_rx, size);
+        } else {
+            warn_report("JIT: no debugger attached, the code buffer stays "
+                        "unexecutable -- the machine will stand still. "
+                        "Launch through the JIT enabler.");
+        }
+
+        /* Only now can the first mapping become writable. */
+        if (mprotect((void *)buf_rw, size, PROT_READ | PROT_WRITE) != 0) {
+            error_setg_errno(errp, errno, "mprotect for jit splitwx (rw)");
+            munmap((void *)buf_rx, size);
+            munmap((void *)buf_rw, size);
+            return -1;
+        }
+    }
+#endif
 
     tcg_splitwx_diff = buf_rx - buf_rw;
     return PROT_READ | PROT_WRITE;
