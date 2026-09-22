@@ -41,7 +41,10 @@ final class Settings: ObservableObject {
     /// phones stopped at the emulator's first instruction, and 256 got both
     /// going; bigger sizes stay on offer, behind a warning.
     static let safeTBSize = 256
-    @AppStorage("tbSize") var tbSize: Int = 128 {
+    // 256 rather than 128 for a macOS guest: its code is many times an iPhone
+    // guest's, and a buffer it does not fit in is flushed and retranslated
+    // over and over (measured on the phone: 64 MB gave 8–11 fps, 256 gave 21–25).
+    @AppStorage("tbSize") var tbSize: Int = 256 {
         willSet { objectWillChange.send() }
     }
     /// Use HVF when the kernel allows it. On by default: where it is not
@@ -592,17 +595,23 @@ private struct MachineSettings: View {
             } header: {
                 Text(L("Ядра"))
             } footer: {
-                Text(L("Одно ядро уходит под SEP: при 4 гостю достаётся 3."))
+                Text(VMConfig.macGuest
+                     ? L("Все ядра достаются гостю. У iPhone 15 два производительных ядра и четыре энергоэффективных.")
+                     : L("Одно ядро уходит под SEP: при 4 гостю достаётся 3."))
             }
 
             Section {
                 Picker(L("Гостю"), selection: $settings.memory) {
-                    ForEach(["1G", "2G", "3G", "4G"], id: \.self) { Text($0).tag($0) }
+                    // No 4 GB: past the process's own ceiling, the app is
+                    // killed before the guest gets anywhere.
+                    ForEach([("1G", "1 ГБ"), ("1536M", "1.5 ГБ"), ("2G", "2 ГБ"), ("3G", "3 ГБ")], id: \.0) {
+                        Text(L($0.1)).tag($0.0)
+                    }
                 }
             } header: {
                 Text(L("Память"))
             } footer: {
-                Text(L("Потолок процесса на iPhone — ровно 3 ГиБ, и в него входит всё остальное, что держит приложение."))
+                Text(L("Потолок процесса на iPhone — около 3 ГиБ, и в него входит всё остальное, что держит приложение: буфер трансляций, графика, сам эмулятор. macOS Ventura доходит до рабочего стола и с 1.5 ГБ. Если приложение закрывается само через какое-то время после запуска — это iOS отбирает память, уменьшите её здесь."))
             }
 
             Section {
