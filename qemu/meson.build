@@ -2280,6 +2280,9 @@ endif
 config_host_data = configuration_data()
 
 config_host_data.set('CONFIG_HMP', have_hmp)
+# ui/inferno-embed.c: the display and input an in-process embedder reads, which
+# only exists in the library build. Devices that report presents to it test this.
+config_host_data.set('CONFIG_INFERNO_EMBED', get_option('shared_lib'))
 config_host_data.set('CONFIG_HAVE_RUST', have_rust)
 audio_drivers_selected = []
 if have_system

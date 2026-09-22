@@ -236,29 +236,39 @@ final class VMModel: ObservableObject {
                     // the console channel needs no link, while the guest puts
                     // its own end of the USB network down once it has booted,
                     // and a shell asked for later would be waiting on that.
-                    self.shell.connect()
+                    //
+                    // Not for macOS: its serial console carries the kernel's
+                    // log and no shell, so there is no bash to wait for.
+                    if !VMConfig.macGuest { self.shell.connect() }
                 }
-                // The library is loaded by now, so the battery can be handed
-                // over before the guest's driver first asks for it.
-                HostBattery.shared.start()
-                // Nothing arrives until the guest vibrates, and nothing at all
-                // from a guest started without sound.
-                HostHaptics.shared.start()
-                // The status bar: once SpringBoard is up, and again whenever the
-                // phone's own connection changes while the guest follows it.
-                PhoneNetwork.shared.onChange = { [weak self] in
-                    guard Settings.shared.statusBarMode == GuestStatusBar.Mode.phone.rawValue else { return }
-                    self?.paintStatusBar()
+                // Everything in this block drives an iPhone guest: its battery,
+                // taptic engine, status bar, the agent the app installs into it
+                // over the console, its packages, and the USB network link it
+                // brings up. A macOS guest has none of them, and several would
+                // type commands into its console to find out.
+                if !VMConfig.macGuest {
+                    // The library is loaded by now, so the battery can be handed
+                    // over before the guest's driver first asks for it.
+                    HostBattery.shared.start()
+                    // Nothing arrives until the guest vibrates, and nothing at all
+                    // from a guest started without sound.
+                    HostHaptics.shared.start()
+                    // The status bar: once SpringBoard is up, and again whenever the
+                    // phone's own connection changes while the guest follows it.
+                    PhoneNetwork.shared.onChange = { [weak self] in
+                        guard Settings.shared.statusBarMode == GuestStatusBar.Mode.phone.rawValue else { return }
+                        self?.paintStatusBar()
+                    }
+                    PhoneNetwork.shared.start()
+                    // Bring up the agent in the background: install it if this is a
+                    // fresh guest, find it if it is already there. It takes over the
+                    // status bar and the service commands from the console. Started
+                    // after a delay so a fresh boot has reached a shell first.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 20) { self.bringUpAgent() }
+                    self.paintStatusBarWhenReady(delay: 30)
+                    if self.config.network { self.watchNetwork() }
+                    if Settings.shared.autoRepairPackages { self.preparePackages() }
                 }
-                PhoneNetwork.shared.start()
-                // Bring up the agent in the background: install it if this is a
-                // fresh guest, find it if it is already there. It takes over the
-                // status bar and the service commands from the console. Started
-                // after a delay so a fresh boot has reached a shell first.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 20) { self.bringUpAgent() }
-                self.paintStatusBarWhenReady(delay: 30)
-                if self.config.network { self.watchNetwork() }
-                if Settings.shared.autoRepairPackages { self.preparePackages() }
                 self.serial.onGuestDeath = { [weak self] in self?.guestDied() }
                 // Report what the machine is doing once it has had time to boot.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
@@ -277,7 +287,10 @@ final class VMModel: ObservableObject {
         // The emulator appends to its console log rather than starting it
         // afresh (see VMConfig), so the run before is cleared away here.
         _ = truncate(VMConfig.guestConsoleLog.path, 0)
+        // The machine's own switches win over the app's: they are what makes a
+        // stock macOS kernel boot at all.
         QemuBridge.shared.environment = Settings.shared.emulatorEnvironment
+            .merging(VMConfig.guestEnvironment) { _, machine in machine }
         QemuBridge.shared.start(arguments: config.arguments())
     }
 
@@ -1849,10 +1862,12 @@ struct SetupView: View {
             Section {
                 Label(L("Виртуальная машина не настроена"), systemImage: "externaldrive.badge.questionmark")
                     .font(.headline)
-                Text(L("Образ macOS готовится отдельно и переносится в приложение вручную — самой закачки и рестора внутри приложения пока нет. Экран выбора VM появится здесь, когда бэкенд будет готов."))
+                Text(L("Папку с VM делает scripts/utm-to-orchard.py на Маке. Её можно скопировать в «Файлы» → Orchard → OrchardVM или выбрать прямо на флешке — тогда VM грузится с неё без копирования."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+
+            VMFolderSection(onChange: { model.refreshFiles() })
 
             if !model.missing.isEmpty {
                 Section(L("Не хватает")) {

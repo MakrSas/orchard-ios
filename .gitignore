@@ -25,3 +25,6 @@ ios/**/.build/
 # Host clutter and agent worktrees
 .DS_Store
 .claude/
+
+# Python bytecode from the scripts
+__pycache__/

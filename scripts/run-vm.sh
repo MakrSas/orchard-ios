@@ -15,7 +15,12 @@ ROOT="$(cd "$HERE/.." && pwd)"
 
 QEMU="${QEMU:-$ROOT/qemu/build/qemu-system-aarch64}"
 IMAGES="${IMAGES:-$ROOT/images}"
-DISK="${DISK:-$IMAGES/disk.raw}"          # tart image, read-only
+# tart image (raw) or scripts/utm-to-orchard.py's (qcow2), read-only
+if [ -z "${DISK:-}" ]; then
+  DISK="$IMAGES/disk.raw"
+  [ -e "$IMAGES/disk.qcow2" ] && DISK="$IMAGES/disk.qcow2"
+fi
+case "$DISK" in *.qcow2) DISK_FORMAT=qcow2 ;; *) DISK_FORMAT=raw ;; esac
 OVERLAY="${OVERLAY:-$IMAGES/overlay.qcow2}"
 AUX="${AUX:-$IMAGES/aux.img}"             # tart NVRAM + LocalPolicy
 ROM="${ROM:-$IMAGES/AVPBooter.patched.bin}"
@@ -50,7 +55,7 @@ fi
 
 # Guest writes go to an overlay; the tart image stays pristine and read-only.
 if [ ! -e "$OVERLAY" ]; then
-  qemu-img create -f qcow2 -F raw -b "$DISK" "$OVERLAY" >/dev/null
+  qemu-img create -f qcow2 -F "$DISK_FORMAT" -b "$DISK" "$OVERLAY" >/dev/null
   echo "created overlay $OVERLAY"
 fi
 
@@ -88,7 +93,7 @@ exec "$QEMU" \
   -m "$RAM" -smp "$CPUS" \
   -bios "$ROM" \
   -drive file="$AUX",if=pflash,format=raw \
-  -drive file="$DISK",if=pflash,format=raw,readonly=on \
+  -drive file="$DISK",if=pflash,format="$DISK_FORMAT",readonly=on \
   -drive file="$AUX",if=none,id=aux,format=raw \
   -device vmapple-virtio-blk-pci,variant=aux,drive=aux,share-rw=on \
   -drive file="$OVERLAY",if=none,id=root,format=qcow2,cache=writeback,aio=threads,discard=unmap \

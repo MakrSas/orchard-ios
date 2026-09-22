@@ -41,7 +41,11 @@ fi
 # переменной INFERNO_DYLIB.
 DYLIB="${INFERNO_DYLIB:-}"
 if [ -z "$DYLIB" ]; then
+    # Orchard's own library first (scripts/build-ios.sh): the one with the
+    # apple-vm machine. The Inferno paths after it hold an iPhone emulator,
+    # which this app no longer drives.
     for candidate in \
+        "$ROOT/../../qemu/build-ios/libqemu-aarch64-softmmu.dylib" \
         "$ROOT/../build/$LIBDIR/libqemu-aarch64-softmmu.dylib" \
         "$HOME/inferno-ios/build/$LIBDIR/libqemu-aarch64-softmmu.dylib"
     do
@@ -196,7 +200,11 @@ echo "==> Помощник для гостя (nsio)"
 # шеллу блочные устройства закрыты. Помощник едет в бандле, приложение кладёт
 # его в гостя один раз. Без него установка .ipa не ломается — она просто идёт по
 # сети, которая в разы медленнее.
-if [ -z "${INFERNO_NO_NSIO:-}" ] && command -v ldid >/dev/null 2>&1; then
+# These tools go into an iPhone guest and are built by Inferno-iOS's netlab/,
+# which this tree does not carry: a macOS guest has no use for them. Built when
+# netlab/ is there, skipped when it is not.
+if [ -z "${INFERNO_NO_NSIO:-}" ] && command -v ldid >/dev/null 2>&1 \
+   && [ -x "$ROOT/../netlab/build-nsio.sh" ]; then
     mkdir -p "$APP/guest-tools"
     "$ROOT/../netlab/build-nsio.sh" "$APP/guest-tools/nsio" >/dev/null
     # The other guest tool: draws a network into the guest's status bar. It

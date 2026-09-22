@@ -51,6 +51,9 @@
 #include "reims_vgpu_qemu_abi.h"
 #include "reims-vgpu-dirty.h"
 #include "reims-vgpu-shim.h"
+#ifdef CONFIG_INFERNO_EMBED
+#include "ui/inferno-embed.h"
+#endif
 
 /*
  * `qemu_graphic_console_create` and the `qemu_console_*` setters are the
@@ -67,7 +70,55 @@
 #if defined(CONFIG_DARWIN)
 #include <dispatch/dispatch.h>
 #include <mach/mach.h>
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+/*
+ * The iOS SDK refuses <mach/mach_vm.h> outright ("mach_vm.h unsupported"),
+ * but a task may still remap its own pages through the older vm_* calls in
+ * <mach/vm_map.h> — the same calls an iOS JIT uses to mirror its code buffer.
+ * On a 64-bit task vm_address_t and mach_vm_address_t describe the same
+ * addresses; they are only distinct C types, hence the copies through locals
+ * rather than a rename.
+ */
+#include <mach/vm_map.h>
+
+static inline kern_return_t reims_vm_allocate(vm_map_t task, mach_vm_address_t *addr,
+                                              mach_vm_size_t size, int flags)
+{
+    vm_address_t a = (vm_address_t)*addr;
+    kern_return_t kr = vm_allocate(task, &a, (vm_size_t)size, flags);
+
+    *addr = a;
+    return kr;
+}
+
+static inline kern_return_t reims_vm_remap(vm_map_t task, mach_vm_address_t *dst,
+                                           mach_vm_size_t size, mach_vm_offset_t mask,
+                                           int flags, vm_map_t src_task,
+                                           mach_vm_address_t src, boolean_t copy,
+                                           vm_prot_t *cur, vm_prot_t *max,
+                                           vm_inherit_t inherit)
+{
+    vm_address_t d = (vm_address_t)*dst;
+    kern_return_t kr = vm_remap(task, &d, (vm_size_t)size, (vm_address_t)mask, flags,
+                                src_task, (vm_address_t)src, copy, cur, max, inherit);
+
+    *dst = d;
+    return kr;
+}
+
+static inline kern_return_t reims_vm_deallocate(vm_map_t task, mach_vm_address_t addr,
+                                                mach_vm_size_t size)
+{
+    return vm_deallocate(task, (vm_address_t)addr, (vm_size_t)size);
+}
+
+#define mach_vm_allocate   reims_vm_allocate
+#define mach_vm_remap      reims_vm_remap
+#define mach_vm_deallocate reims_vm_deallocate
+#else
 #include <mach/mach_vm.h>
+#endif
 #endif
 #if defined(TARGET_AARCH64) || defined(TARGET_ARM)
 #include "target/arm/cpu.h"
@@ -150,7 +201,11 @@ struct ReimsVGPUMMIOState {
 
 static ReimsVGPUMMIOState *reims_vgpu_mmio_instance;
 
-#if defined(CONFIG_DARWIN)
+/*
+ * Not in the library build: there is no QEMU main() to hand over there, and the
+ * embedding app already owns its initial thread (see include/ui/inferno-embed.h).
+ */
+#if defined(CONFIG_DARWIN) && !defined(CONFIG_INFERNO_EMBED)
 /*
  * winit/AppKit owns the initial process thread. QEMU's Darwin main wrapper
  * already moves its emulation loop to a background thread when qemu_main is
@@ -743,6 +798,10 @@ static bool reims_vgpu_mmio_paint_scanout(ReimsVGPUMMIOState *s,
             qemu_console_update_full(s->con);
             s->new_frame_ready = false;
         }
+#ifdef CONFIG_INFERNO_EMBED
+        /* One frame into the console, however many rows it touched. */
+        inferno_display_note_present();
+#endif
     }
     return true;
 }
@@ -911,8 +970,12 @@ static void reims_vgpu_mmio_poll_tick(void *opaque)
  * qemu_console_update_full when that flag is set — not fixed-rate thrash of
  * every vsync with no new guest present (archive present-boundary = newFrame;
  * stamp completes before HostAction apply so guest waiters see stamp first).
+ *
+ * Always synchronous: every path paints (or declines to) before returning,
+ * and nothing calls qemu_console_hw_update_done later, so the answer to
+ * GraphicHwOps.gfx_update's "handled synchronously?" is always true.
  */
-static void reims_vgpu_mmio_fb_update(void *opaque)
+static bool reims_vgpu_mmio_fb_update(void *opaque)
 {
     ReimsVGPUMMIOState *s = opaque;
     uint32_t mapping_id = 0;
@@ -922,7 +985,7 @@ static void reims_vgpu_mmio_fb_update(void *opaque)
     uint32_t kind;
 
     if (!s->con) {
-        return;
+        return true;
     }
 
     /*
@@ -955,7 +1018,7 @@ static void reims_vgpu_mmio_fb_update(void *opaque)
             qemu_console_update_full(s->con);
             s->new_frame_ready = false;
         }
-        return;
+        return true;
     }
     if (kind == REIMS_VGPU_CONSOLE_FEED_FIRMWARE) {
         /*
@@ -976,7 +1039,7 @@ static void reims_vgpu_mmio_fb_update(void *opaque)
                 qemu_console_update_full(s->con);
             }
         }
-        return;
+        return true;
     }
 
     /* Nothing painted this tick — re-push the last frame if one is pending.
@@ -986,6 +1049,7 @@ static void reims_vgpu_mmio_fb_update(void *opaque)
         qemu_console_update_full(s->con);
         s->new_frame_ready = false;
     }
+    return true;
 }
 
 static const GraphicHwOps reims_vgpu_mmio_fb_ops = {
@@ -1340,7 +1404,7 @@ static void reims_vgpu_mmio_realize(DeviceState *dev, Error **errp)
                                                     s->early_fb_width,
                                                     s->early_fb_height);
             }
-#if defined(CONFIG_DARWIN)
+#if defined(CONFIG_DARWIN) && !defined(CONFIG_INFERNO_EMBED)
             reims_vgpu_mmio_window_owner = s;
             qemu_main = reims_vgpu_mmio_window_main_loop;
 #endif
@@ -1383,7 +1447,7 @@ static void reims_vgpu_mmio_unrealize(DeviceState *dev)
         reims_vgpu_qemu_device_destroy(s->rust_handle);
         s->rust_handle = 0;
     }
-#if defined(CONFIG_DARWIN)
+#if defined(CONFIG_DARWIN) && !defined(CONFIG_INFERNO_EMBED)
     if (reims_vgpu_mmio_window_owner == s) {
         reims_vgpu_mmio_window_owner = NULL;
     }

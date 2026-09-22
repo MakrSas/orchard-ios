@@ -2,11 +2,25 @@ import Foundation
 
 /// Builds the emulator command line and reports what is missing.
 ///
-/// The layout mirrors the desktop kit: an `InfernoData` directory plus the SEP
-/// ROM, dropped into the app's Documents folder over the Files app.
+/// The guest is macOS on QEMU's `apple-vm` machine — the one
+/// Virtualization.framework runs on Apple Silicon — booted through Apple's own
+/// chain, AVPBooter → iBoot → XNU. Its files are an `OrchardVM` folder in the
+/// app's Documents, dropped in over the Files app; `scripts/utm-to-orchard.py`
+/// makes that folder out of a UTM virtual machine.
+///
+/// The iPhone half of this type (`InfernoData`, the SEP ROM, the restore
+/// firmware) is the app shell's inheritance from Inferno-iOS. It is not used to
+/// start anything any more, and stays only because the restore screens still
+/// compile against it; it goes when they do.
 struct VMConfig {
-    var cores: Int = 4          // 3 CPU cores + the SEP core
-    var memory: String = "3G"
+    /// The guest is macOS. The app shell grew up around an iPhone guest and
+    /// still has the code that drives one — its battery, taptic engine, status
+    /// bar, packages and in-guest agent — and every one of those talks to a
+    /// guest that is not there. This is what keeps them quiet.
+    static let macGuest = true
+
+    var cores: Int = 4
+    var memory: String = "1536M"
     var vncPort: UInt16 = 5900
     var serialPort: UInt16 = 4555
     var qmpPort: UInt16 = 4556
@@ -65,6 +79,72 @@ struct VMConfig {
 
     static var dataDirectory: URL { documents.appendingPathComponent("InfernoData") }
 
+    // MARK: The macOS virtual machine
+
+    /// The five files a macOS guest boots from, as `scripts/utm-to-orchard.py`
+    /// lays them out and `scripts/run-vm.sh` uses them on a desktop.
+    /// A folder picked in Settings (a USB drive, say) when there is one, the
+    /// app's own `Documents/OrchardVM` otherwise; see `VMFolder`.
+    static var vmDirectory: URL { VMFolder.chosen ?? documents.appendingPathComponent("OrchardVM") }
+    /// The system disk, `disk.qcow2` or `disk.raw`. Only ever read: the guest
+    /// writes into `overlay`. qcow2 is what the converter makes: the guest's
+    /// disk is 64 GiB with ~16 in use, and a raw copy stays that small only
+    /// while its holes survive, which exFAT and the Files app do not allow.
+    static var disk: URL {
+        let qcow = vmDirectory.appendingPathComponent("disk.qcow2")
+        return FileManager.default.fileExists(atPath: qcow.path)
+            ? qcow : vmDirectory.appendingPathComponent("disk.raw")
+    }
+    static var diskFormat: String { disk.pathExtension == "qcow2" ? "qcow2" : "raw" }
+    /// A qcow2 over `disk`, holding everything the guest writes.
+    ///
+    /// Not optional. The machine opens the disk twice, once as a read-only
+    /// flash and once as the root device, and on Darwin nothing arbitrates
+    /// between the two: QEMU's `locking=auto` means no locks at all without
+    /// open-file-description locks, which this kernel does not have. Through
+    /// the overlay both opens of `disk` are reads, so neither can see the other
+    /// change under it — and the disk stays exactly as it came, so a first boot
+    /// that goes wrong costs an overlay, not the system.
+    static var overlay: URL { vmDirectory.appendingPathComponent("overlay.qcow2") }
+    /// The NVRAM and LocalPolicy. Personalised to this VM's ECID along with the
+    /// disk, so it only ever works with the disk it came with.
+    static var aux: URL { vmDirectory.appendingPathComponent("aux.img") }
+    /// Apple's VM firmware, patched to run outside Apple's hypervisor.
+    static var rom: URL { vmDirectory.appendingPathComponent("AVPBooter.patched.bin") }
+    /// Where the ECID comes from, in the format tart and this project use.
+    static var machineConfig: URL { vmDirectory.appendingPathComponent("config.json") }
+
+    /// The VM's ECID: base64 of a binary plist `{ECID: <int>}` under `ecid`.
+    ///
+    /// Nil when there is no such file or no such key. The LocalPolicy on the
+    /// disk is signed for exactly this number, so there is no default that
+    /// could stand in for it.
+    static var ecid: UInt64? {
+        guard let data = try? Data(contentsOf: machineConfig),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let encoded = json["ecid"] as? String,
+              let blob = Data(base64Encoded: encoded),
+              let plist = (try? PropertyListSerialization.propertyList(from: blob, format: nil)) as? [String: Any],
+              let number = plist["ECID"] as? NSNumber
+        else { return nil }
+        return number.uint64Value
+    }
+
+    /// What the emulator reads from its environment for this machine, the same
+    /// switches `scripts/run-vm.sh` sets.
+    static let guestEnvironment: [String: String] = [
+        // The stock kernel checks its own signed pointers, so pointer
+        // authentication has to be real or it dies with "JOP Hash Mismatch".
+        "ORCHARD_REAL_PAUTH": "1",
+        // A core started by PSCI CPU_ON gets the keys the firmware would have
+        // left it; without this every secondary faults on its first check.
+        "ORCHARD_PAC_INHERIT": "1",
+        // Put the boot framebuffer on screen as well as the composited
+        // desktop: the Apple logo and progress bar come long before the
+        // guest's own graphics stack draws anything.
+        "REIMS_VGPU_FORCE_SCANOUT": "1",
+    ]
+
     /// The scratch namespace both sides reach: the app writes bytes into this
     /// file, the guest reads the same place as a block device.
     static var transferImage: URL { dataDirectory.appendingPathComponent("xfer") }
@@ -104,10 +184,14 @@ struct VMConfig {
     /// the machine sits there looking for something to start, which from the
     /// outside is indistinguishable from a hang. A restore is what fills it, so
     /// the first bytes are worth a look before the machine is let go.
+    ///
+    /// For a macOS guest the system comes installed — the disk is one that has
+    /// already booted to a desktop elsewhere — so this only guards against an
+    /// empty one: a qcow2 with nothing allocated, or a raw file of zeros where
+    /// a GPT should begin.
     static var systemInstalled: Bool {
-        guard let image = rootImage else { return false }
-        if image.format == "qcow2" { return qcow2HasAllocatedData(at: image.path) }
-        guard let handle = FileHandle(forReadingAtPath: image.path) else { return false }
+        if diskFormat == "qcow2" { return qcow2HasAllocatedData(at: disk.path) }
+        guard let handle = FileHandle(forReadingAtPath: disk.path) else { return false }
         defer { try? handle.close() }
         let head = handle.readData(ofLength: 64 * 1024)
         return head.contains { $0 != 0 }
@@ -268,21 +352,21 @@ struct VMConfig {
         ("SEP ROM", "AppleSEPROM-Cebu-B1"),
     ]
 
+    /// What a macOS guest needs in `OrchardVM`, in the order a person should
+    /// fix it — the disk first, since everything else is personalised to it.
     static func missingFiles() -> [String] {
-        // The three the manifest names go last, since which files they are
-        // depends on the version that was installed.
-        let loaded = firmware
-        let all = requiredFiles + [
-            ("Kernelcache", "InfernoData/" + loaded.kernel),
-            ("Device tree", "InfernoData/" + loaded.deviceTree),
-            ("TrustCache", "InfernoData/" + loaded.trustcache),
+        let files: [(label: String, url: URL)] = [
+            (L("Диск macOS (OrchardVM/disk.qcow2 или disk.raw)"), disk),
+            (L("Оверлей (OrchardVM/overlay.qcow2)"), overlay),
+            (L("NVRAM (OrchardVM/aux.img)"), aux),
+            (L("Прошивка VM (OrchardVM/AVPBooter.patched.bin)"), rom),
+            (L("Конфигурация с ECID (OrchardVM/config.json)"), machineConfig),
         ]
-        var missing = all.compactMap { entry -> String? in
-            let url = documents.appendingPathComponent(entry.relativePath).resolvingSymlinksInPath()
-            return usable(url) ? nil : entry.label
-        }
-        if rootImage == nil {
-            missing.insert(L("Диск устройства (root.qcow2 или root)"), at: 0)
+        var missing = files.compactMap { usable($0.url.resolvingSymlinksInPath()) ? nil : $0.label }
+        // Present but unreadable is as good as absent: without the ECID the
+        // machine cannot be told who it is.
+        if usable(machineConfig), ecid == nil {
+            missing.append(L("ECID в OrchardVM/config.json не читается"))
         }
         return missing
     }
@@ -321,86 +405,46 @@ struct VMConfig {
             ?? "tlto_us=-1 agm-genuine=1 agm-authentic=1 agm-trusted=1 serial=3 wdt=-1 launchd_unsecure_cache=1 -vm_compressor_wk_sw"
     }
 
+    /// The command line for the macOS guest.
+    ///
+    /// `scripts/run-vm.sh` is the reference, and every device and drive below
+    /// is the same as there; its comments say what each one cost to find. What
+    /// differs is what a phone cannot give: memory, cores and translation
+    /// buffer come from the settings rather than a desktop's 10 GiB and 12
+    /// cores, and the console and QMP are on the loopback, where the app's
+    /// clients expect them.
     func arguments() -> [String] {
-        let data = VMConfig.dataDirectory.path
-        let sep = VMConfig.sepROM.path
-        // A relative name on purpose: AF_UNIX stores the path itself, and the
-        // 104-byte sun_path limit cannot hold an app container path. The
-        // emulator runs with its working directory set to the socket's folder,
-        // so both ends resolve this to the same file.
-        let usbSocket = VMConfig.usbSocketName
-
-        let loaded = VMConfig.firmware
-        // Who gets the guest's USB port. `inferno` is the protocol this app
-        // speaks: the port dials the socket below and whoever listens there is
-        // the host. `virtualhere` turns it around — the emulator listens, and a
-        // VirtualHere client on another machine takes the device.
-        var parts = ["t8030"]
-        if let usbExport {
-            parts += ["usb-uplink-type=virtualhere", "usb-uplink-addr=\(usbExport)"]
-        } else {
-            parts += ["usb-uplink-type=inferno", "usb-uplink-addr=unix:\(usbSocket)"]
-        }
-        parts += [
-            "trustcache=\(data)/\(loaded.trustcache)",
-            "ticket=\(data)/root_ticket.der",
-            "sep-fw=\(data)/sep-firmware.n104.RELEASE.new.img4",
-            "sep-rom=\(sep)",
-            "kaslr-off=true",
-        ]
-        // Which way out of recovery the machine takes, said every time rather
-        // than left to whatever NVRAM happens to hold.
-        //
-        // An ordinary run only ever starts an installed system, and NVRAM can
-        // say `auto-boot=false` — left there by a restore that did not finish.
-        // Then the machine heads for recovery, wants a ramdisk nobody passed,
-        // and the emulator quits with `RAM Disk required for recovery` before
-        // the guest exists.
-        //
-        // A restore is the mirror of that, and getting it wrong is worse,
-        // because nothing says so: on `auto-boot=true` the machine ignores the
-        // ramdisk, boots as usual, finds no system on a blank disk, sits on
-        // `Still waiting for root device` and panics a minute later in
-        // `IOAESAccelerator`. Restores used to work here only because an
-        // earlier unfinished one had left `auto-boot=false` behind; a kit made
-        // from scratch carries a NVRAM that says otherwise.
-        parts.append(restoreRamdiskPath == nil ? "boot-mode=exit_recovery" : "boot-mode=enter_recovery")
-        parts += [
-            "disp-width=\(displayWidth)",
-            "disp-height=\(displayHeight)",
-            "disp-scale=\(displayScale)",
-        ]
-        let machine = parts.joined(separator: ",")
-
         // QEMU looks for its data files (VNC keymaps among them) next to the
         // binary; inside an app bundle it has to be told where they are, or it
         // reports "could not read keymap file" and exits.
         let dataDir = (Bundle.main.resourcePath ?? Bundle.main.bundlePath) + "/qemu-data"
 
-        // HVF where the kernel allows it: the guest's cores run on the iPad's,
-        // and the emulator patches the kernel for it by itself.
-        //
-        // Otherwise multi-threaded TCG, since iOS gives no hypervisor access to
-        // applications. Never single: the SEP and the AP cores have to move
-        // together, and on one thread the SEP panics initialising its key
-        // store, so the guest never boots. That used to be a setting, and it
-        // only ever caught people out. split-wx maps the translation buffer
-        // twice — writable and executable — which is what a debugger-enabled
-        // process is allowed to do when MAP_JIT is refused.
-        let accel = virtualization
-            ? "hvf"
-            : "tcg,thread=multi,tb-size=\(tbSize)" + (JIT.needsSplitWX ? ",split-wx=on" : "")
+        // Multi-threaded TCG: iOS gives applications no hypervisor. split-wx
+        // maps the translation buffer twice, writable and executable, which is
+        // what a debugger-enabled process may do when MAP_JIT is refused.
+        let accel = "tcg,thread=multi,tb-size=\(tbSize)" + (JIT.needsSplitWX ? ",split-wx=on" : "")
+
+        let disk = VMConfig.disk.path
+        let aux = VMConfig.aux.path
 
         var argv = [
             "qemu-system-aarch64",
             "-L", dataDir,
             "-accel", accel,
-            "-M", machine,
-            "-kernel", "\(data)/\(loaded.kernel)",
-            "-dtb", "\(data)/\(loaded.deviceTree)",
-            "-append", VMConfig.bootArguments,
+            // missingFiles() refuses a start without a readable ECID, so the
+            // zero is never what a machine is actually given.
+            "-M", "apple-vm,uuid=\(VMConfig.ecid ?? 0)",
             "-smp", String(cores),
             "-m", memory,
+            "-bios", VMConfig.rom.path,
+            "-drive", "file=\(aux),if=pflash,format=raw",
+            // Not flash: the machine takes its boot device's aux and root
+            // backends from these two slots, so any format QEMU reads will do.
+            "-drive", "file=\(disk),if=pflash,format=\(VMConfig.diskFormat),readonly=on",
+            "-drive", "file=\(aux),if=none,id=aux,format=raw",
+            "-device", "vmapple-virtio-blk-pci,variant=aux,drive=aux,share-rw=on",
+            "-drive", "file=\(VMConfig.overlay.path),if=none,id=root,format=qcow2,cache=writeback,aio=threads,discard=unmap",
+            "-device", "vmapple-virtio-blk-pci,variant=root,drive=root",
             // The console is logged to a file rather than only streamed: a
             // socket drops everything printed before a client attaches, and the
             // guest starts talking long before the UI can connect. Appended to,
@@ -409,91 +453,23 @@ struct VMConfig {
             // the app empties the file before each start instead.
             "-chardev", "socket,id=serial0,host=127.0.0.1,port=\(serialPort),server=on,wait=off,logfile=\(VMConfig.guestConsoleLog.path),logappend=on",
             "-serial", "chardev:serial0",
-            // Lets the app ask the machine what state it is in.
+            // Lets the app ask the machine what state it is in, and stop it cleanly.
             "-qmp", "tcp:127.0.0.1:\(qmpPort),server,nowait",
-            "-drive", "file=\(data)/sep_nvram,if=pflash,format=raw",
-            "-drive", "file=\(data)/sep_ssc,if=pflash,format=raw",
         ]
 
-        // A restore boots the ramdisk from the IPSW instead of the disk. The
-        // machine puts `-restore rd=md0` on the command line by itself once it
-        // sees one, so nothing else changes here.
-        if let ramdisk = restoreRamdiskPath {
-            argv += ["-initrd", ramdisk]
-            // A restore ends with the guest asking to be reset, and the machine
-            // would go down with it -- taking the ramdisk, and our patcher
-            // still working inside it, along. Holding the reset keeps the
-            // machine up until the app stops it itself.
-            argv += ["-global", "driver=apple-smc,property=hold-reset,value=on"]
-        }
-
-        if !audio {
-            // Silence is asked for explicitly: with no audiodev named, the
-            // machine's sound card takes the first output the build offers.
-            // The global is written in its long form on purpose — the short
-            // one splits the driver name at its first dot, and this driver is
-            // called `apple.mca`, so `-global apple.mca.audiodev=quiet` looks
-            // for a device called `apple` and is quietly dropped.
-            argv += ["-audiodev", "none,id=quiet",
-                     "-global", "driver=apple.mca,property=audiodev,value=quiet"]
+        if network {
+            argv += ["-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0"]
         }
 
         if headless || builtInDisplay {
             // Nothing for the emulator to serve: either there is no screen at
             // all, or the app reads the framebuffer directly once the machine
-            // is up.
+            // is up (ui/inferno-embed.c).
             argv += ["-display", "none"]
         }
         else {
             argv += ["-vnc", "127.0.0.1:\(vncPort - 5900)"]
         }
-
-        if let root = VMConfig.rootImage {
-            argv += ["-drive", "file=\(root.path),format=\(root.format),if=none,id=root"]
-            argv += ["-device", "nvme-ns,drive=root,bus=nvme-bus.0,nsid=1,nstype=1,logical_block_size=4096,physical_block_size=4096"]
-        }
-
-        // The remaining NVMe namespaces the machine expects, in order.
-        let namespaces: [(file: String, nsid: Int, nstype: Int)] = [
-            ("firmware", 2, 2),
-            ("syscfg", 3, 3),
-            ("ctrl_bits", 4, 4),
-            ("effaceable", 6, 6),
-            ("panic_log", 7, 8),
-        ]
-        for ns in namespaces {
-            argv += ["-drive", "file=\(data)/\(ns.file),format=raw,if=none,id=\(ns.file)"]
-            argv += ["-device", "nvme-ns,drive=\(ns.file),bus=nvme-bus.0,nsid=\(ns.nsid),nstype=\(ns.nstype),logical_block_size=4096,physical_block_size=4096"]
-        }
-
-        // A scratch namespace that both sides can reach: the app writes bytes
-        // into the file, the guest reads them straight off the block device, and
-        // nothing travels through the console or the network on the way. It is
-        // attached only when the file exists, because the guest only learns of a
-        // namespace if the emulator describes it in the device tree — an
-        // emulator without that patch would simply ignore this one.
-        //
-        // cache=none is not a tuning knob here. Without it the emulator answers
-        // out of the host's page cache and the guest reads what the file used to
-        // hold, which looks exactly like a corrupt transfer.
-        let transfer = VMConfig.dataDirectory.appendingPathComponent("xfer")
-        if FileManager.default.fileExists(atPath: transfer.path) {
-            argv += ["-drive", "file=\(transfer.path),format=raw,if=none,id=xfer,cache=none"]
-            argv += ["-device", "nvme-ns,drive=xfer,bus=nvme-bus.0,nsid=8,nstype=2,logical_block_size=4096,physical_block_size=4096"]
-        }
-
-        // Not while the port is served to another machine: this device would be
-        // a second host for a port that has one.
-        if network, usbExport == nil {
-            // The device listens on the same socket the machine's USB port
-            // dials into, so it must be named identically.
-            argv += ["-netdev", "user,id=net0"]
-            argv += ["-device", "apple-ncm-host,netdev=net0,conn-addr=\(usbSocket)"]
-        }
-
-        // nvram is its own device type, not a plain namespace.
-        argv += ["-drive", "file=\(data)/nvram,if=none,format=raw,id=nvram"]
-        argv += ["-device", "apple-nvram,drive=nvram,bus=nvme-bus.0,nsid=5,nstype=5,id=nvram,logical_block_size=4096,physical_block_size=4096"]
 
         return argv
     }

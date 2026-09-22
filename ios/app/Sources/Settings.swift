@@ -25,7 +25,11 @@ final class Settings: ObservableObject {
     /// left beside it the SEP panics initialising its key store, so the guest
     /// never boots. 2 and 3 used to be offered and only ever caught people out.
     static let coreChoices = [4, 5, 7]
-    @AppStorage("memory") var memory: String = "3G" {
+    /// 1.5 GiB: a Ventura 13.6 guest has been measured reaching its desktop
+    /// with that much under Virtualization.framework. Below the 4 GiB floor
+    /// Virtualization.framework enforces for itself, which QEMU's machine does
+    /// not share.
+    @AppStorage("memory") var memory: String = "1536M" {
         willSet { objectWillChange.send() }
     }
     /// Left at the middle of the range on purpose. Bigger is faster — measured
@@ -255,6 +259,8 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             SettingsRoot {
+                VMFolderSection(onChange: { model.refreshFiles() })
+
                 Section {
                     NavigationLink { ScreenSettings() } label: {
                         Label(L("Экран"), systemImage: "iphone.gen3")
