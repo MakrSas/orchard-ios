@@ -227,6 +227,17 @@ final class EmbeddedDisplay: GuestDisplay {
             tally = Tally()
             tally.secondSince = open
         }
+        // Always, for a macOS guest still being brought up: whether frames
+        // reach the app at all, and whether what arrives is anything but black.
+        // A blank screen has three different causes — the machine never
+        // presents, it presents but nothing is read, or it presents black —
+        // and only these three numbers tell them apart.
+        if VMConfig.macGuest {
+            LogCapture.shared.note(L("Экран: машина показала %d кадров, до приложения дошло %d, последний кадр — %@",
+                                     tally.presents.reduce(0, +), tally.delivered, frameLooksBlank()
+                                        ? L("чёрный") : L("есть изображение")))
+        }
+
         guard Settings.shared.showFPS, statsFn != nil else { return }
 
         // A window in which the machine showed nothing and nothing reached the
@@ -243,6 +254,20 @@ final class EmbeddedDisplay: GuestDisplay {
             drawing.filter { $0 >= 30 }.count, drawing.count,
             Double(tally.delivered) / elapsed, Double(tally.idle) / elapsed,
             Double(tally.refreshes) / elapsed, milliseconds(tally.readNanos), milliseconds(tally.handNanos)))
+    }
+
+    /// Whether the newest frame is black everywhere, sampled on a grid rather
+    /// than read in full: a boot logo or a line of text crosses it.
+    private func frameLooksBlank() -> Bool {
+        guard !buffers.isEmpty, bufferBytes > 0 else { return true }
+        let newest = buffers[(current + EmbeddedDisplay.bufferCount - 1) % EmbeddedDisplay.bufferCount]
+        let pixels = newest.assumingMemoryBound(to: UInt32.self)
+        let count = bufferBytes / 4
+        let step = max(1, count / 4096)
+        for i in Swift.stride(from: 0, to: count, by: step) where pixels[i] & 0x00FF_FFFF != 0 {
+            return false
+        }
+        return true
     }
 
     private func resize(width: Int, height: Int) {
