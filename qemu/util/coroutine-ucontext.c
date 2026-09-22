@@ -23,7 +23,24 @@
 #define _FORTIFY_SOURCE 0
 
 #include "qemu/osdep.h"
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+/*
+ * iOS ships getcontext/makecontext/swapcontext only as stubs that fail, so the
+ * first coroutine QEMU creates (the monitor's, inside qemu_init) aborts. The
+ * sigaltstack backend is no way out either: it makes coroutines by raising
+ * SIGUSR2, which the debugger iOS needs for JIT intercepts. libucontext has
+ * the same primitives in plain assembly and is linked through the cross-file.
+ * Same fix as Inferno-iOS's util/coroutine-ucontext.c. (TargetConditionals.h
+ * comes in through osdep.h.)
+ */
+#include <libucontext/libucontext.h>
+#define ucontext_t  libucontext_ucontext_t
+#define getcontext  libucontext_getcontext
+#define makecontext libucontext_makecontext
+#define swapcontext libucontext_swapcontext
+#else
 #include <ucontext.h>
+#endif
 #include "qemu/coroutine_int.h"
 #include "qemu/coroutine-tls.h"
 
