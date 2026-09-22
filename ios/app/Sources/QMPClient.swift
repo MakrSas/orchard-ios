@@ -50,6 +50,65 @@ final class QMPClient {
         }
     }
 
+    /// Where the guest is, in one line: CPU0's program counter and exception
+    /// level, and how many cores are running rather than halted.
+    ///
+    /// For a guest whose console goes quiet at the kernel handoff — a macOS
+    /// kernel under full security ignores `serial=3` — this is what tells a
+    /// boot that is moving from one that is stuck. Early XNU runs at EL1 in
+    /// the kernel's own addresses (0xfffffe…), iBoot does not, and the
+    /// kernel's bring-up of the secondary cores shows as cores leaving halt.
+    func snapshot(_ completion: @escaping (String) -> Void) {
+        Thread.detachNewThread { [port] in
+            let sock = Sock()
+            defer { sock.close() }
+            if let problem = sock.connect(port: port) { return completion("CPU: \(problem)") }
+            guard sock.readSome() != nil,
+                  let _ = QMPClient.call(sock, "{\"execute\":\"qmp_capabilities\"}")
+            else { return completion(L("CPU: QMP не отвечает")) }
+
+            func hmp(_ line: String) -> String? {
+                QMPClient.call(sock, "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"\(line)\"}}")
+                    .flatMap { reply in
+                        (try? JSONSerialization.jsonObject(with: Data(reply.utf8))) as? [String: Any]
+                    }
+                    .flatMap { $0["return"] as? String }
+            }
+
+            var parts: [String] = []
+            if let regs = hmp("info registers") {
+                let pc = regs.range(of: #"PC=[0-9a-f]+"#, options: .regularExpression).map { String(regs[$0]) } ?? "PC=?"
+                let el = regs.range(of: #"EL[0-3][th]"#, options: .regularExpression).map { String(regs[$0]) } ?? "EL?"
+                let hex = pc.dropFirst(3)
+                let place = hex.hasPrefix("fffffe") ? L("ядро XNU") : L("не в ядре")
+                parts.append("CPU0 \(pc) \(el) (\(place))")
+            }
+            if let cpus = hmp("info cpus") {
+                let lines = cpus.split(separator: "\n").filter { $0.contains("CPU #") }
+                let halted = lines.filter { $0.contains("(halted)") }.count
+                parts.append(L("ядер в работе: %d из %d", lines.count - halted, lines.count))
+            }
+            completion(parts.isEmpty ? L("CPU: снимок не получен") : parts.joined(separator: " · "))
+        }
+    }
+
+    /// One command, one whole reply. A reply can arrive in pieces and events
+    /// can arrive in between, so read until a line carrying `return` or
+    /// `error` is complete.
+    private static func call(_ sock: Sock, _ command: String) -> String? {
+        guard sock.write(Array((command + "\n").utf8)) else { return nil }
+        var buffer = ""
+        for _ in 0..<64 {
+            guard let chunk = sock.readSome(max: 64 * 1024) else { return nil }
+            buffer += String(decoding: chunk, as: UTF8.self)
+            for line in buffer.split(separator: "\n", omittingEmptySubsequences: true)
+            where line.contains("\"return\"") || line.contains("\"error\"") {
+                if buffer.hasSuffix("\n") || line != buffer.split(separator: "\n").last { return String(line) }
+            }
+        }
+        return nil
+    }
+
     /// Asks the machine to shut down.
     ///
     /// This is the only safe way to stop it. `quit` unwinds QEMU's main loop,

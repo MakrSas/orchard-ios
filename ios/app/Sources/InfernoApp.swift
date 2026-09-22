@@ -270,6 +270,7 @@ final class VMModel: ObservableObject {
                     if Settings.shared.autoRepairPackages { self.preparePackages() }
                 }
                 self.serial.onGuestDeath = { [weak self] in self?.guestDied() }
+                if VMConfig.macGuest { self.watchBoot() }
                 // Report what the machine is doing once it has had time to boot.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
                     self.inspectMachine()
@@ -1035,6 +1036,20 @@ final class VMModel: ObservableObject {
     func inspectMachine() {
         Threads.report { report in LogCapture.shared.note(report) }
         qmp.inspect { report in LogCapture.shared.note(report) }
+    }
+
+    private var bootWatch: Timer?
+
+    /// A line in the log every half minute saying where CPU0 is and how many
+    /// cores run: the only progress report a macOS guest gives once iBoot has
+    /// handed over, since its kernel keeps quiet on the console under full
+    /// security.
+    func watchBoot() {
+        bootWatch?.invalidate()
+        bootWatch = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] timer in
+            guard let self, self.isRunning else { timer.invalidate(); return }
+            self.qmp.snapshot { LogCapture.shared.note($0) }
+        }
     }
 
     // MARK: Input
