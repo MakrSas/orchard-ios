@@ -102,7 +102,7 @@ Password», Shut Down / Restart / Sleep). Около 1 кадра/с на экр
 | `afe3eef` | строка про экран: кадры показаны / дошли / чёрный ли |
 | `5a968be` | журнал reims-vgpu на iOS в `TMPDIR` (патч 0005), приложение копирует в Documents; исправлен снимок CPU |
 | `1c901d1` | текст ошибки Metal, сохранение блобов, повтор с iOS-штампом (патч 0006) — **дал картинку** |
-| `fb48ca0` | клавиатура: `inferno_input_key_hid`, `GuestKeyboard.swift`; без скругления экрана для macOS |
+| `6ebf7c7` | клавиатура: `inferno_input_key_hid`, `GuestKeyboard.swift`; без скругления экрана для macOS |
 
 **reims-vgpu** — сабмодуль, изменения живут патчами `patches/reims-vgpu/0003…0006`.
 В рабочем дереве сабмодуля они уже применены. На свежем клоне:
