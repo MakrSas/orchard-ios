@@ -302,6 +302,7 @@ final class VMModel: ObservableObject {
     func shutdown() {
         guard isRunning else { return }
         LogCapture.shared.note(L("Выключение: отправляю QMP quit…"))
+        VMModel.publishDisplayLogs()
         qmp.quit { report in LogCapture.shared.note(report) }
         display?.disconnect()
         shell.disconnect()
@@ -1046,9 +1047,31 @@ final class VMModel: ObservableObject {
     /// security.
     func watchBoot() {
         bootWatch?.invalidate()
-        bootWatch = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] timer in
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] timer in
             guard let self, self.isRunning else { timer.invalidate(); return }
             self.qmp.snapshot { LogCapture.shared.note($0) }
+            VMModel.publishDisplayLogs()
+        }
+        // Added to the main run loop by hand, in the common modes: the
+        // scheduled-timer shorthand from this callback's context is what drew
+        // "invalid mode 'kCFRunLoopCommonModes'" on the first device run.
+        RunLoop.main.add(timer, forMode: .common)
+        bootWatch = timer
+    }
+
+    /// reims-vgpu's own logs — the always-on failure channel above all, where
+    /// a refused shader or pipeline says why a frame came out black — are in
+    /// the process's temporary directory on iOS, which the Files app cannot
+    /// reach. Copied beside the app's other logs as the machine runs, so they
+    /// survive a crash too.
+    static func publishDisplayLogs() {
+        let fm = FileManager.default
+        for name in ["reims-vgpu-fail.log", "reims-vgpu-draw.log"] {
+            let source = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(name)
+            guard fm.fileExists(atPath: source.path) else { continue }
+            let target = VMConfig.documents.appendingPathComponent(name)
+            try? fm.removeItem(at: target)
+            try? fm.copyItem(at: source, to: target)
         }
     }
 

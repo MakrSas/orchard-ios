@@ -62,51 +62,46 @@ final class QMPClient {
         Thread.detachNewThread { [port] in
             let sock = Sock()
             defer { sock.close() }
+            // The same steps, in the same order, as `inspect`, which is known
+            // to get answers; each failure says which step it was.
             if let problem = sock.connect(port: port) { return completion("CPU: \(problem)") }
-            guard sock.readSome() != nil,
-                  let _ = QMPClient.call(sock, "{\"execute\":\"qmp_capabilities\"}")
-            else { return completion(L("CPU: QMP не отвечает")) }
+            guard sock.readSome() != nil else { return completion(L("CPU: QMP не прислал приветствие")) }
+            guard sock.write(Array("{\"execute\":\"qmp_capabilities\"}\n".utf8)),
+                  sock.readSome() != nil
+            else { return completion(L("CPU: QMP не принял qmp_capabilities")) }
 
             func hmp(_ line: String) -> String? {
-                QMPClient.call(sock, "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"\(line)\"}}")
-                    .flatMap { reply in
-                        (try? JSONSerialization.jsonObject(with: Data(reply.utf8))) as? [String: Any]
-                    }
-                    .flatMap { $0["return"] as? String }
+                let command = "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"\(line)\"}}\n"
+                guard sock.write(Array(command.utf8)) else { return nil }
+                // A reply is one line; it may arrive in pieces, so read on
+                // until the newline that ends it.
+                var reply = Data()
+                while !reply.contains(UInt8(ascii: "\n")) {
+                    guard let chunk = sock.readSome(max: 64 * 1024) else { return nil }
+                    reply.append(chunk)
+                }
+                let line = reply.prefix { $0 != UInt8(ascii: "\n") }
+                guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any]
+                else { return nil }
+                return object["return"] as? String
             }
 
             var parts: [String] = []
             if let regs = hmp("info registers") {
                 let pc = regs.range(of: #"PC=[0-9a-f]+"#, options: .regularExpression).map { String(regs[$0]) } ?? "PC=?"
                 let el = regs.range(of: #"EL[0-3][th]"#, options: .regularExpression).map { String(regs[$0]) } ?? "EL?"
-                let hex = pc.dropFirst(3)
-                let place = hex.hasPrefix("fffffe") ? L("ядро XNU") : L("не в ядре")
+                let place = pc.dropFirst(3).hasPrefix("fffffe") ? L("ядро XNU") : L("не в ядре")
                 parts.append("CPU0 \(pc) \(el) (\(place))")
+            } else {
+                parts.append(L("info registers не ответил"))
             }
             if let cpus = hmp("info cpus") {
                 let lines = cpus.split(separator: "\n").filter { $0.contains("CPU #") }
                 let halted = lines.filter { $0.contains("(halted)") }.count
                 parts.append(L("ядер в работе: %d из %d", lines.count - halted, lines.count))
             }
-            completion(parts.isEmpty ? L("CPU: снимок не получен") : parts.joined(separator: " · "))
+            completion(parts.joined(separator: " · "))
         }
-    }
-
-    /// One command, one whole reply. A reply can arrive in pieces and events
-    /// can arrive in between, so read until a line carrying `return` or
-    /// `error` is complete.
-    private static func call(_ sock: Sock, _ command: String) -> String? {
-        guard sock.write(Array((command + "\n").utf8)) else { return nil }
-        var buffer = ""
-        for _ in 0..<64 {
-            guard let chunk = sock.readSome(max: 64 * 1024) else { return nil }
-            buffer += String(decoding: chunk, as: UTF8.self)
-            for line in buffer.split(separator: "\n", omittingEmptySubsequences: true)
-            where line.contains("\"return\"") || line.contains("\"error\"") {
-                if buffer.hasSuffix("\n") || line != buffer.split(separator: "\n").last { return String(line) }
-            }
-        }
-        return nil
     }
 
     /// Asks the machine to shut down.

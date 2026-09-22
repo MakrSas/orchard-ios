@@ -1,0 +1,59 @@
+Subject: [PATCH] observe: write the always-on logs where an iOS app can
+
+The failure channel and the draw log are opened at /tmp/reims-vgpu-*.log.
+Inside an iOS app's sandbox /tmp is not writable, the open fails, and every
+line is dropped — a refused shader or pipeline, exactly what would explain a
+guest that presents frames the device shows black, says nothing at all.
+
+On iOS the process's own temporary directory is used instead
+(std::env::temp_dir(), which is what TMPDIR names there); the embedding app
+copies the file out where a person can reach it. Every other platform keeps
+/tmp, so nothing changes for the pathways in the Supported table, and test
+builds keep their per-process files. Which directory a build uses is a fact of
+the platform it was compiled for, so it is a target_os cfg and not a switch.
+
+---
+diff --git a/crates/reims-vgpu-observe/src/sink.rs b/crates/reims-vgpu-observe/src/sink.rs
+index c1b5196b..5bb7e484 100644
+--- a/crates/reims-vgpu-observe/src/sink.rs
++++ b/crates/reims-vgpu-observe/src/sink.rs
+@@ -112,18 +112,37 @@ fn test_path(kind: &str) -> String {
+     format!("/tmp/reims-vgpu-{kind}-test-{}.log", std::process::id())
+ }
+ 
++/// Where a product build's sink of this kind lives.
++///
++/// `/tmp` everywhere but iOS, where an app's sandbox cannot write it: the
++/// open fails, and every line on the always-on failure channel is dropped with
++/// nothing to say so. There the process's own temporary directory is used — on
++/// iOS that is what `TMPDIR` names, and the embedding app copies the file out
++/// to where a person can reach it. Which directory this build uses is a fact
++/// about the platform it was compiled for, not a switch.
++#[cfg(not(any(test, feature = "testing")))]
++fn product_path(kind: &str) -> String {
++    #[cfg(target_os = "ios")]
++    return std::env::temp_dir()
++        .join(format!("reims-vgpu-{kind}.log"))
++        .to_string_lossy()
++        .into_owned();
++    #[cfg(not(target_os = "ios"))]
++    format!("/tmp/reims-vgpu-{kind}.log")
++}
++
+ pub fn fail_log_path() -> &'static str {
+     #[cfg(any(test, feature = "testing"))]
+     return FAIL_PATH.get_or_init(|| test_path("fail"));
+     #[cfg(not(any(test, feature = "testing")))]
+-    FAIL_PATH.get_or_init(|| "/tmp/reims-vgpu-fail.log".to_string())
++    FAIL_PATH.get_or_init(|| product_path("fail"))
+ }
+ 
+ pub fn draw_log_path() -> &'static str {
+     #[cfg(any(test, feature = "testing"))]
+     return DRAW_PATH.get_or_init(|| test_path("draw"));
+     #[cfg(not(any(test, feature = "testing")))]
+-    DRAW_PATH.get_or_init(|| "/tmp/reims-vgpu-draw.log".to_string())
++    DRAW_PATH.get_or_init(|| product_path("draw"))
+ }
+ 
+ /// Test-harness support: point the always-on sinks at per-process files so a
