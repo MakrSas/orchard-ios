@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The HVF build. Private entitlements survive only a TrollStore or
+         jailbreak install; a sideloading certificate strips them, and then
+         the app falls back to the translator as the ordinary build does. -->
+
+    <!-- The kernel's hypervisor, on iPadOS up to 16.3.1 on M1 and M2. -->
+    <key>com.apple.private.hypervisor</key>
+    <true/>
+
+    <!-- MAP_JIT without a debugger, so the translator still works where HVF
+         does not. -->
+    <key>dynamic-codesigning</key>
+    <true/>
+
+    <!-- Kept so StikDebug and Xcode can still attach. -->
+    <key>get-task-allow</key>
+    <true/>
+
+    <!-- The guest wants gigabytes; the default per-app cap is far below that. -->
+    <key>com.apple.developer.kernel.increased-memory-limit</key>
+    <true/>
+    <key>com.apple.developer.kernel.extended-virtual-addressing</key>
+    <true/>
+</dict>
+</plist>

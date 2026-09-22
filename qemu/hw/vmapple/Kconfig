@@ -32,5 +32,9 @@ config VMAPPLE
     select VMAPPLE_AES
     select VMAPPLE_BDIF
     select VMAPPLE_CFG
-    select REIMS_VGPU
+    # No `select REIMS_VGPU` here: it already `default y`s on its own
+    # (hw/display/Kconfig) regardless of this machine, so selecting it too
+    # was redundant. Which host GPU API it actually builds against (Vulkan
+    # on Linux, Metal on iOS/macOS) is a Cargo feature switch in
+    # hw/display/meson.build, not a Kconfig question.
     select VMAPPLE_VIRTIO_BLK

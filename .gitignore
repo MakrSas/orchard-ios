@@ -16,3 +16,12 @@ vm.log
 # QEMU ships an SSH test fixture (tests/keys/id_rsa) that secret scanning
 # blocks on push. Nothing here builds or runs it.
 qemu/tests/keys/
+
+# iOS port: build output and packaged apps. The IPAs carry a built QEMU and are
+# rebuilt by ios/*/build.sh; nothing in them is source.
+ios/**/.build/
+*.ipa
+
+# Host clutter and agent worktrees
+.DS_Store
+.claude/

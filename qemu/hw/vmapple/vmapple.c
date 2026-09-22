@@ -43,7 +43,15 @@
 #include "hw/vmapple/apple_vm_cpu.h"
 #include "hw/core/or-irq.h"
 #include "target/arm/gtimer.h"
+#ifdef CONFIG_REIMS_VGPU
+/* Nothing here uses this header directly (the GFX device is picked by
+ * object_class_by_name below, a runtime string lookup) — but it pulls in
+ * reims_vgpu_qemu_abi.h, which only exists once the crate actually builds.
+ * Unconditional before this, harmlessly; keep it out when the crate isn't
+ * part of the build (the iOS cross build, for now — its Metal backend isn't
+ * ready yet, see patches/reims-vgpu/) so this file doesn't need it either. */
 #include "hw/display/reims-vgpu-shim.h"
+#endif
 #include "target/arm/arm-powerctl.h"
 #include "net/net.h"
 #include "qapi/error.h"

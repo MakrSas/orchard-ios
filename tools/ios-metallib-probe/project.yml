@@ -1,0 +1,23 @@
+name: MetallibProbe
+options:
+  bundleIdPrefix: dev.orchard.probe
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  MetallibProbe:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Samples
+        optional: true
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.orchard.probe.metallib
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: metallib probe
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic

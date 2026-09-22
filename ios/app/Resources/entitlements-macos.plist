@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hypervisor.framework, for running the guest's cores on the Mac's own.
+         Public on macOS, and granted to an ad-hoc signature on the Mac that
+         signs it. No sandbox and no hardened runtime: the emulator maps its
+         JIT buffer with MAP_JIT, and loads the libraries bundled beside it. -->
+    <key>com.apple.security.hypervisor</key>
+    <true/>
+</dict>
+</plist>

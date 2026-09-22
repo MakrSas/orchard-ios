@@ -502,7 +502,13 @@ if host_os == 'windows'
 elif host_os == 'emscripten'
   supported_backends += ['wasm']
 else
-  if host_os != 'darwin' and cc.links(ucontext_probe)
+  # Real Darwin (macOS) is excluded: Apple's own ucontext is deprecated and
+  # not reliable enough to build on. iOS is the one Darwin exception — it has
+  # no working system ucontext at all, but the iOS cross build links a
+  # separate libucontext (reused from the Inferno-iOS toolchain, which needs
+  # the same thing for the same reason) that provides one, so the probe below
+  # is what actually decides it rather than a blanket host_os check.
+  if (host_os != 'darwin' or host_machine.subsystem() == 'ios') and cc.links(ucontext_probe)
     supported_backends += ['ucontext']
   endif
   supported_backends += ['sigaltstack']
@@ -4405,13 +4411,40 @@ foreach target : target_dirs
     lib_deps += dep.partial_dependency(compile_args: true, includes: true)
   endforeach
 
-  lib = static_library('qemu-' + target,
-                 sources: arch_srcs + genh,
-                 dependencies: lib_deps,
-                 objects: objects,
-                 include_directories: target_inc,
-                 c_args: c_args,
-                 build_by_default: false)
+  if get_option('shared_lib')
+    # Embedders that cannot exec a second process (iOS) dlopen this and call
+    # qemu_init/qemu_main_loop/qemu_cleanup directly, so the symbols have to
+    # stay visible and the executable below links against the library
+    # instead of absorbing its objects. Ported from the Inferno-iOS tree,
+    # which uses the same split for the same reason.
+    lib = shared_library('qemu-' + target,
+                   sources: arch_srcs + genh,
+                   # target_stubs (kvm-stub.c etc.) used to come along for
+                   # free through arch_deps on the QEMU version the shared_lib
+                   # split was ported from (Inferno-iOS, QEMU 10.2.2); on this
+                   # tree (11.1.50) they're their own dependency, added below
+                   # the executable's link only (see 'dependencies: [sdl,
+                   # target_stubs]' further down) — which the executable here
+                   # doesn't need since it just links this library, but the
+                   # library itself does: it's what actually calls the ARM
+                   # system code (hw/arm/virt.c etc.) that references
+                   # kvm_arm_pmu_init and friends when CONFIG_KVM is off.
+                   dependencies: arch_deps + [target_stubs],
+                   objects: objects,
+                   include_directories: target_inc,
+                   c_args: c_args,
+                   install: true,
+                   gnu_symbol_visibility: 'default',
+                   build_by_default: false)
+  else
+    lib = static_library('qemu-' + target,
+                   sources: arch_srcs + genh,
+                   dependencies: lib_deps,
+                   objects: objects,
+                   include_directories: target_inc,
+                   c_args: c_args,
+                   build_by_default: false)
+  endif
 
   if target.endswith('-softmmu')
     execs = [{
@@ -4451,11 +4484,19 @@ foreach target : target_dirs
       exe_name += '-unsigned'
     endif
 
+    if get_option('shared_lib')
+      exe_deps = [declare_dependency(link_with: lib)]
+      exe_objs = []
+    else
+      exe_deps = arch_deps
+      exe_objs = lib.extract_all_objects(recursive: true)
+    endif
+
     emulator = executable(exe_name, exe['sources'],
                install: true,
                c_args: c_args,
-               dependencies: arch_deps + exe['dependencies'],
-               objects: lib.extract_all_objects(recursive: true),
+               dependencies: exe_deps + exe['dependencies'],
+               objects: exe_objs,
                link_depends: [block_syms, qemu_syms],
                link_args: link_args,
                win_subsystem: exe['win_subsystem'])

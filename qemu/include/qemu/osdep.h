@@ -845,6 +845,9 @@ size_t qemu_get_host_physmem(void);
  * for the current thread.
  */
 #ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
 static inline void qemu_thread_jit_execute(void)
 {
     pthread_jit_write_protect_np(true);
@@ -854,6 +857,15 @@ static inline void qemu_thread_jit_write(void)
 {
     pthread_jit_write_protect_np(false);
 }
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+/*
+ * iOS has no pthread_jit_write_protect_np(): MAP_JIT pages there are plain
+ * RWX once the process carries the JIT entitlement (or runs under a
+ * debugger — see JIT.swift on the app side), so there is no W^X state to
+ * toggle. Same conclusion, same reason, as the Inferno-iOS tree.
+ */
+static inline void qemu_thread_jit_write(void) {}
+static inline void qemu_thread_jit_execute(void) {}
 #else
 static inline void qemu_thread_jit_write(void) {}
 static inline void qemu_thread_jit_execute(void) {}

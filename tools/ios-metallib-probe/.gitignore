@@ -1,0 +1,8 @@
+# Apple's own compiled shader binaries, harvested from this machine by
+# fetch-samples.sh. Local-only: these are third-party bytes and must not be
+# committed. Re-run the script to get them back.
+Samples/
+
+# xcodegen output
+MetallibProbe.xcodeproj/
+build/

@@ -1544,6 +1544,14 @@ static void raw_refresh_limits(BlockDriverState *bs, Error **errp)
     }
 
 #if defined(__APPLE__) && (__MACH__)
+    /*
+     * Not covered by the HAVE_HOST_BLOCK_DEVICE include block above (which
+     * pulls in sys/param.h + sys/mount.h): that one is IOKit/real-disk
+     * access, off on iOS, so struct statfs/fstatfs need their own include
+     * here rather than assuming the other block already ran.
+     */
+#include <sys/param.h>
+#include <sys/mount.h>
     struct statfs buf;
 
     if (!fstatfs(s->fd, &buf)) {

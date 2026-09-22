@@ -488,3 +488,10 @@ option('tcg_tests_cross_cflags_xtensaeb', type: 'string',
 
 option('reims_vgpu_dir', type: 'string', value: '',
        description: 'path to the reims-vgpu crate (default: ../reims-vgpu)')
+
+option('shared_lib', type: 'boolean', value: false,
+       description: 'build qemu-<target> as a shared library instead of ' +
+                     'linking it into the qemu-system-<target> executable. ' +
+                     'For embedders that cannot exec a second process (iOS): ' +
+                     'they dlopen this and call qemu_init/qemu_main_loop/' +
+                     'qemu_cleanup directly. Ported from the Inferno-iOS tree.')

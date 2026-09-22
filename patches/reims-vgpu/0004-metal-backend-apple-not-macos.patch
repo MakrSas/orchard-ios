@@ -1,0 +1,1480 @@
+Subject: [PATCH] backend-metal: Apple, not macOS
+
+Metal is Apple's API, not the desktop's. `backend-metal` was gated to
+`target_os = "macos"` in four places, and none of them was a statement
+about a checked macOS specificity — the module header of
+`backend/metal/mod.rs` said so outright: "every `target_os = "macos"` gate
+below is a statement of that fact rather than a branch." The fact being
+restated was the `compile_error!` in `lib.rs`, and that one was only ever
+about there being no host-stub Metal arm. iOS runs the same Metal, on the
+same Apple Silicon GPU, through the same `objc` runtime and the same
+`metal` crate; it was excluded because nobody had tried, not because
+anything here had been found to be desktop-specific.
+
+This is the host half of running the arm64 macOS guest on an iOS device.
+The QEMU side already cross-compiles; this is what was left between it and
+a frame.
+
+What each gate turned out to be answering, and what it now answers:
+
+1. `lib.rs`'s `compile_error!` — "is there a Metal to reach". The real
+   precondition is an Apple platform, so it is keyed on
+   `target_vendor = "apple"`. A non-Apple target is still rejected with
+   the same message and the same advice.
+
+2. `backend/metal/mod.rs`'s fifteen per-module gates — these asked "did
+   this build compile Metal encode", which `feature = "backend-metal"`
+   already answers in full once (1) admits every Apple target. They are
+   dropped rather than widened: a second gate that can only ever agree
+   with the feature is a gate that will one day disagree with it by
+   accident. The module header now states the Apple-only fact once,
+   without claiming the modules below are branching on it.
+
+3. Every `all(feature = "backend-metal", target_os = "macos")` in the
+   crate (122 of them, across `backend/compute_session.rs`,
+   `runtime/{compute_exec,compute_session,decode,draw,icb,mipmap}`) —
+   same question as (2), same answer, same reduction to the feature
+   alone. On `aarch64-apple-darwin` this substitution is an identity:
+   `target_os = "macos"` is true there by definition, so the conjunction
+   and the bare feature select exactly the same code. The macOS pathway
+   is unchanged by construction, not merely by test.
+
+   This subsumes 0003, which had already made this reduction for the five
+   `SelectedBackend` match arms where the extra conjunct broke match
+   exhaustiveness. The two patches touch disjoint files.
+
+4. `backend/heap_placement.rs` — the one gate here that is genuinely
+   about the platform rather than about the build. It asks whether a
+   driver exists to answer the guest's `heapTextureSizeAndAlign`
+   contract, deliberately independent of which rail is compiled or
+   running (see the module header). That question is about the *vendor*:
+   iOS ships the same Metal driver on the same GPU, and it is the driver,
+   not the host OS, the guest contract is asking about. Keyed on
+   `target_vendor = "apple"`, so an iOS host answers the placement query
+   from the driver instead of refusing it from nowhere.
+
+`Cargo.toml`'s `[target.'cfg(target_os = "macos")'.dependencies]` — the
+`metal`, `objc`, `block`, `foreign-types`, `libc` and
+`core-graphics-types` block — moves to `cfg(target_vendor = "apple")` for
+the same reason: what those five crates need is an Apple platform.
+
+`window.rs` and the `host-window` feature are untouched. That rail is a
+`CAMetalLayer` on an `NSWindow` and genuinely is desktop-shaped; the iOS
+embedder is the application itself and takes frames through
+`Backend::published_frame_rgba8`, which is a CPU readback and needs no
+window. `host-window` stays off there, and the Vulkan rail is untouched
+throughout.
+
+## No Metal API difference had to be resolved, and why that is the finding
+
+The expectation going in was that `device.rs` / `raw_metal.rs` would need
+real work for iOS — `MTLStorageModeManaged` has no iOS spelling, argument
+buffer tiers differ, feature-set queries differ. None of it materialised,
+and the reason is structural rather than lucky: this backend was already
+written to the unified-memory Apple Silicon subset, which is what iOS
+*is*.
+
+  - Every allocation in the rail is `Shared` (or `Private`). There is no
+    `Managed` anywhere under `backend/metal/`, so the storage-mode
+    difference has no site to appear at.
+  - No `synchronizeResource:`, `synchronizeTexture:…`, `didModifyRange:`
+    or `setPurgeableState:` — the managed-memory selector family is
+    absent for the same reason.
+  - No `MTLFeatureSet`, `supportsFamily:` or `argumentBuffersSupport`
+    query exists in the rail; placement policy is not derived from a
+    device class.
+  - "IOSurface" throughout this crate names the *guest's* surface pages,
+    not the host framework. No host IOSurface, CoreVideo, CoreGraphics
+    or AppKit symbol is reached outside `window.rs`.
+  - `runtime.rs`'s `newBufferWithBytesNoCopy` path already measures the
+    host page with `sysconf(_SC_PAGESIZE)` at run time and const-asserts
+    the guest arm64e page (16 KiB) against the Apple Silicon page. Both
+    hold on iOS unchanged; the assertion is checked by every compile,
+    this one included.
+  - `constants.rs`'s argument-table caps (31 buffers, 128 textures, 16
+    samplers, 8 colour RTs) are the Apple-family limits from family 6
+    upward, which is every device that could host this.
+
+So the nine compile errors this port produced were all in the crate's own
+glue, all of category (3), and none in `backend/metal/` itself.
+
+## Verified, and not
+
+Verified: `cargo build --release --target aarch64-apple-ios
+--no-default-features --features backend-metal -p reims-vgpu` completes
+clean; the emitted objects carry `LC_VERSION_MIN_IPHONEOS` (device, not
+simulator). `cargo clippy` on the same target adds no new warning. On
+`aarch64-apple-darwin` the suite is unchanged: 1391 pass, and the two
+failures present are both reproduced identically on a pristine baseline
+of the same tree — `runtime::spirv_bind::more_tests::a_module_a_
+validator_rejects_never_reaches_a_driver`, and fifteen
+`runtime::icb::tests` mesh cases that abort inside Metal validation with
+"Use of mesh shader pipelines in indirect command buffers is not
+supported by this device", which is a limit of the host GPU this ran on.
+The other 47 icb cases pass.
+
+Measured on a device after the fact, with `tools/ios-metallib-probe` on
+an Apple A16 GPU: (a) below is answered yes, and (d) is answered no. The
+remaining two still need a booted VM, which this pathway has never had —
+it is not in the Supported pathways table:
+
+  a. ~~Whether the guest's MTLB libraries load on an iOS driver.~~
+     **ANSWERED — YES.** Measured on an Apple A16 GPU with
+     `tools/ios-metallib-probe`: a metallib built by the macOS Metal
+     compiler loads on an iOS device as-is, exposing every function.
+     No platform restamp is needed; the probe tries one anyway and it
+     also loads, so the stamp is not enforced in either direction. This
+     was the risk that decided between a desktop and a blank screen, and
+     it is closed.
+
+     A failure here would still surface as
+     `metal_function_library_create_failed reason=… mtlb_len=N`, which
+     remains the slug to grep for in a run that boots but never draws.
+
+  b. **Whether `heapTextureSizeAndAlign` returns the same placement on
+     iOS as on macOS.** Point (4) assumes the guest ABI's answer is the
+     GPU's and not the host OS's. Same silicon, same driver family, and
+     a differing answer would be a host implementation detail leaking
+     into a guest contract — but it is an assumption, and a wrong one
+     would corrupt heap placement silently rather than refuse.
+
+  c. **Device-capability aborts.** The fifteen mesh-in-ICB failures above
+     are the shape of this: Metal answers an unsupported combination
+     with a validation `abort()`, not a status this device can decline.
+     Which combinations an iOS GPU refuses that a Mac accepts is not
+     enumerable from here.
+
+  d. **BC pixel formats — MEASURED ABSENT, and this is now the largest
+     known gap.** The guess recorded in an earlier draft of this patch,
+     that BC arrives with Apple family 7 (A14/M1), is wrong. The probe
+     reports `supportsBCTextureCompression == false` on an Apple A16 GPU
+     that advertises `apple6 apple7 apple8`, while an M1 Mac advertising
+     only `apple6 apple7` reports `true`. BC therefore tracks **Mac**,
+     not the family ordinal, and no iPhone has it regardless of vintage.
+
+     A macOS guest believes it is on a Mac and will send BC textures.
+     The Vulkan rail already survives this: `block_compressed` in
+     `runtime/draw/texture_view.rs` is a measured capability, and a host
+     that clears it loses the texture with a typed reason. **The Metal
+     rail has no counterpart** — `backend/metal/format.rs` names no BC
+     format and gates nothing, because on every Mac this rail has ever
+     run on the answer was yes.
+
+     Left untouched here deliberately: adding the gate is a device-model
+     behaviour change, not part of making the rail compile, and it
+     belongs in its own patch with its own reasoning. What this patch
+     owes is the statement that the gap exists and is real rather than
+     hypothetical. Note the failure mode is the one from (c) — Metal
+     refuses an unsupported format by aborting the process, not by
+     returning nil — so the gate is worth having before a long guest run.
+
+No stub or placeholder was left in place of an implementation: nothing in
+this patch replaces a real path with a degraded one. What is unfinished
+is verification, not code.
+
+---
+diff --git a/crates/reims-vgpu/Cargo.toml b/crates/reims-vgpu/Cargo.toml
+index ec29fc48..4e8a4e55 100644
+--- a/crates/reims-vgpu/Cargo.toml
++++ b/crates/reims-vgpu/Cargo.toml
+@@ -16,8 +16,9 @@ name = "reims_vgpu"
+ [features]
+ # The project supports exactly three arms, one per host GPU API actually
+ # available: Metal on Apple, Vulkan through MoltenVK on Apple, and Vulkan on a
+-# native Linux ICD. backend-metal is therefore **Apple-only** — src/lib.rs
+-# rejects it elsewhere with a compile_error!. There is no host-stub Metal arm;
++# native Linux ICD. backend-metal is therefore **Apple-only** (macOS and iOS
++# alike) — src/lib.rs rejects it elsewhere with a compile_error!. There is no
++# host-stub Metal arm;
+ # a binary that links but cannot draw is worse than a build that fails.
+ default = ["backend-metal"]
+ backend-metal = []
+@@ -109,8 +110,11 @@ wayland-backend = { version = "0.3", features = ["client_system"], optional = tr
+ wayland-protocols = { version = "0.32", features = ["client", "unstable"], optional = true }
+ x11-dl = { version = "2.21", optional = true }
+ 
+-# Metal encode is macOS-only; `backend-metal` is rejected on any other host.
+-[target.'cfg(target_os = "macos")'.dependencies]
++# Metal encode is Apple-only; `backend-metal` is rejected on any other host.
++# Keyed on the vendor rather than on `target_os = "macos"` because iOS is the
++# same Metal, the same `objc` runtime and the same `metal` crate — what these
++# five crates need is an Apple platform, not the desktop one.
++[target.'cfg(target_vendor = "apple")'.dependencies]
+ metal = "0.33"
+ # `CGSize`, for the one CoreAnimation call that takes one — `CAMetalLayer`'s
+ # `drawableSize`, which the host window's Metal presenter sets explicitly rather
+diff --git a/crates/reims-vgpu/src/backend/compute_session.rs b/crates/reims-vgpu/src/backend/compute_session.rs
+index 523fb539..d97f687b 100644
+--- a/crates/reims-vgpu/src/backend/compute_session.rs
++++ b/crates/reims-vgpu/src/backend/compute_session.rs
+@@ -12,7 +12,7 @@ use crate::runtime::compute_exec::{ComputeAccum, ComputeStatus};
+ use crate::runtime::decode::compute_spi::Command as ComputeCommand;
+ use crate::runtime::host::{HostMemory, HostOps};
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use crate::runtime::compute_session::metal;
+ 
+ /// An encoder a rail holds open across one compute segment.
+@@ -40,7 +40,7 @@ pub struct ComputeSession {
+ /// enum empty, and `&mut` to an uninhabited type is still something every
+ /// method has to match on (`references are always considered inhabited`).
+ enum SessionRail {
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     Metal(metal::MetalSession),
+     /// No rail. Unconstructible; see the enum's doc.
+     #[allow(
+@@ -59,7 +59,7 @@ impl ComputeSession {
+     /// [`crate::backend::Backend::open_compute_session`], which is what makes
+     /// "every session in this process belongs to the process's rail" true by
+     /// construction rather than by convention.
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     pub(crate) fn from_metal(rail: metal::MetalSession) -> Self {
+         Self {
+             rail: SessionRail::Metal(rail),
+@@ -67,7 +67,7 @@ impl ComputeSession {
+     }
+ 
+     /// This session's Metal encoder, if that is the rail behind it.
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     pub(crate) fn metal_mut(&mut self) -> Option<&mut metal::MetalSession> {
+         match &mut self.rail {
+             SessionRail::Metal(rail) => Some(rail),
+@@ -83,13 +83,10 @@ impl ComputeSession {
+     // Read only by this module's tests, and only on a rail that can open a
+     // session — so a build with no such rail compiles them and runs neither.
+     #[cfg(test)]
+-    #[cfg_attr(
+-        not(all(feature = "backend-metal", target_os = "macos")),
+-        allow(dead_code)
+-    )]
++    #[cfg_attr(not(feature = "backend-metal"), allow(dead_code))]
+     pub(crate) fn control_depth(&self) -> i32 {
+         match &self.rail {
+-            #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++            #[cfg(feature = "backend-metal")]
+             SessionRail::Metal(rail) => rail.control_depth,
+             SessionRail::Unbacked(_) => 0,
+         }
+@@ -97,13 +94,10 @@ impl ComputeSession {
+ 
+     /// Dispatches encoded on this session whose writeback is still deferred.
+     #[cfg(test)]
+-    #[cfg_attr(
+-        not(all(feature = "backend-metal", target_os = "macos")),
+-        allow(dead_code)
+-    )]
++    #[cfg_attr(not(feature = "backend-metal"), allow(dead_code))]
+     pub(crate) fn deferred_writeback_count(&self) -> usize {
+         match &self.rail {
+-            #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++            #[cfg(feature = "backend-metal")]
+             SessionRail::Metal(rail) => rail.nested_jobs.len(),
+             SessionRail::Unbacked(_) => 0,
+         }
+@@ -118,7 +112,7 @@ impl ComputeSession {
+         cmd: &ComputeCommand,
+     ) -> ComputeStatus {
+         match &mut self.rail {
+-            #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++            #[cfg(feature = "backend-metal")]
+             SessionRail::Metal(rail) => rail.encode_control(state, host, task_id, cmd),
+             SessionRail::Unbacked(_) => {
+                 let _ = (state, host, task_id, cmd);
+@@ -140,7 +134,7 @@ impl ComputeSession {
+             return ComputeStatus::MissingBuffer("compute_icb_ref_zero");
+         }
+         match &mut self.rail {
+-            #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++            #[cfg(feature = "backend-metal")]
+             SessionRail::Metal(rail) => rail.encode_icb(state, host, task_id, cmd, acc),
+             SessionRail::Unbacked(_) => {
+                 let _ = (state, host, task_id, cmd, acc);
+@@ -160,7 +154,7 @@ impl ComputeSession {
+         task_id: u32,
+     ) -> ComputeStatus {
+         match self.rail {
+-            #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++            #[cfg(feature = "backend-metal")]
+             SessionRail::Metal(rail) => rail.finish(host, state, task_id),
+             SessionRail::Unbacked(_) => {
+                 let _ = (host, state, task_id);
+diff --git a/crates/reims-vgpu/src/backend/heap_placement.rs b/crates/reims-vgpu/src/backend/heap_placement.rs
+index 0eecb26b..f833e77c 100644
+--- a/crates/reims-vgpu/src/backend/heap_placement.rs
++++ b/crates/reims-vgpu/src/backend/heap_placement.rs
+@@ -10,11 +10,18 @@
+ //! contract with a host implementation detail.
+ //!
+ //! So the running rail does not enter into it, and neither does the *compiled*
+-//! one. The gate below is `target_os = "macos"` alone — the gate this code has
+-//! always carried — because the question is whether a driver exists to be
+-//! asked, not which rail this build ships. Moving it under `backend::metal`,
+-//! which is gated on `feature = "backend-metal"`, would silently make the
+-//! macOS Vulkan pathway start refusing a query it answers today.
++//! one. The gate below is `target_vendor = "apple"` alone — a platform gate,
++//! as this code has always carried — because the question is whether a driver
++//! exists to be asked, not which rail this build ships. Moving it under
++//! `backend::metal`, which is gated on `feature = "backend-metal"`, would
++//! silently make the macOS Vulkan pathway start refusing a query it answers
++//! today.
++//!
++//! The vendor, not `target_os = "macos"`: iOS ships the same Metal driver on
++//! the same Apple Silicon GPU, and it is that driver — not the host OS — the
++//! guest's `heapTextureSizeAndAlign` contract is asking about. Narrowing this
++//! to the desktop OS would make an iOS host refuse a placement query its GPU
++//! can answer exactly, and answer it from nowhere instead.
+ //!
+ //! Everything above this — the request decode, the descriptor, the reply
+ //! encoding, the refusal vocabulary — is wire and stays in
+@@ -22,7 +29,7 @@
+ 
+ use crate::runtime::heap_query::{QueryError, SizeAndAlign, TextureDescriptor};
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ pub fn heap_texture_size_and_align(desc: &TextureDescriptor) -> Result<SizeAndAlign, QueryError> {
+     use crate::protocol::texture_shape::TextureKind;
+     use metal::{
+@@ -98,14 +105,14 @@ pub fn heap_texture_size_and_align(desc: &TextureDescriptor) -> Result<SizeAndAl
+     })
+ }
+ 
+-#[cfg(not(target_os = "macos"))]
++#[cfg(not(target_vendor = "apple"))]
+ pub fn heap_texture_size_and_align(_desc: &TextureDescriptor) -> Result<SizeAndAlign, QueryError> {
+     // The Linux Vulkan pathway does not yet have a verified equivalence between
+     // VkImage memory requirements and Apple's guest heap placement contract.
+     Err(QueryError::NoMetalDevice)
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ fn pixel_format_from_wire(raw: u16) -> Option<metal::MTLPixelFormat> {
+     use metal::MTLPixelFormat as F;
+     Some(match raw as u64 {
+diff --git a/crates/reims-vgpu/src/backend/metal/mod.rs b/crates/reims-vgpu/src/backend/metal/mod.rs
+index 110b52c7..5a319069 100644
+--- a/crates/reims-vgpu/src/backend/metal/mod.rs
++++ b/crates/reims-vgpu/src/backend/metal/mod.rs
+@@ -1,9 +1,9 @@
+ //! Direct host-Metal backend: pure-Rust Metal encode driven from `runtime/`.
+ //!
+-//! macOS only. `backend-metal` on any other target is rejected by the
++//! Apple only. `backend-metal` on any other target is rejected by the
+ //! `compile_error!` in `lib.rs`, so there is no non-Apple arm of this module
+-//! and every `target_os = "macos"` gate below is a statement of that fact
+-//! rather than a branch.
++//! and the modules below carry no platform gate of their own: the feature is
++//! already the whole answer to "did this build compile Metal encode".
+ 
+ pub mod abi;
+ mod constants;
+@@ -13,39 +13,24 @@ pub mod error;
+ // Apple: real Metal encode
+ // ---------------------------------------------------------------------------
+ 
+-#[cfg(target_os = "macos")]
+ mod cache;
+ /// The census lines only this rail can answer. Reached through
+ /// [`crate::backend::Backend::emit_census`], never through a `cfg`.
+-#[cfg(target_os = "macos")]
+ mod census;
+-#[cfg(target_os = "macos")]
+ pub(crate) mod compute;
+-#[cfg(target_os = "macos")]
+ mod device;
+-#[cfg(target_os = "macos")]
+ pub(crate) mod format;
+-#[cfg(target_os = "macos")]
+ mod function;
+-#[cfg(target_os = "macos")]
+ pub(crate) mod mipmap;
+-#[cfg(target_os = "macos")]
+ pub(crate) mod mtl_enum;
+-#[cfg(target_os = "macos")]
+ pub(crate) mod raw_metal;
+-#[cfg(target_os = "macos")]
+ pub(crate) mod render;
+ /// Colour render targets this rail keeps alive across draws, and the one claim
+ /// that makes loading from one safe. See the module doc.
+-#[cfg(target_os = "macos")]
+ pub(crate) mod resident;
+-#[cfg(target_os = "macos")]
+ pub(crate) mod runtime;
+-#[cfg(target_os = "macos")]
+ pub(crate) mod samplers;
+-#[cfg(target_os = "macos")]
+ mod stage_input;
+-#[cfg(target_os = "macos")]
+ pub(crate) mod util;
+ 
+ /// This rail's half of the host-owned presentation window: a `CAMetalLayer` on
+@@ -56,5 +41,4 @@ pub(crate) mod util;
+ #[cfg(feature = "host-window")]
+ pub mod window;
+ 
+-#[cfg(target_os = "macos")]
+ pub(crate) use device::MetalBackend;
+diff --git a/crates/reims-vgpu/src/lib.rs b/crates/reims-vgpu/src/lib.rs
+index 6049f378..71ebd6e6 100644
+--- a/crates/reims-vgpu/src/lib.rs
++++ b/crates/reims-vgpu/src/lib.rs
+@@ -60,11 +60,12 @@
+ #[cfg(not(any(feature = "backend-metal", feature = "backend-vulkan")))]
+ compile_error!("select at least one of backend-metal or backend-vulkan");
+ 
+-#[cfg(all(feature = "backend-metal", not(target_os = "macos")))]
++#[cfg(all(feature = "backend-metal", not(target_vendor = "apple")))]
+ compile_error!(
+-    "backend-metal requires target_os = \"macos\": there is no host-stub Metal \
+-     arm. Use --no-default-features --features backend-vulkan,host-window on \
+-     any other host."
++    "backend-metal requires an Apple target (target_vendor = \"apple\"): Metal \
++     is Apple's API and there is no host-stub Metal arm. Use \
++     --no-default-features --features backend-vulkan,host-window on any other \
++     host."
+ );
+ 
+ // Vulkan reaches the GPU through MoltenVK on macOS and a native ICD on
+diff --git a/crates/reims-vgpu/src/runtime/compute_exec/metal.rs b/crates/reims-vgpu/src/runtime/compute_exec/metal.rs
+index 1760f049..aea04517 100644
+--- a/crates/reims-vgpu/src/runtime/compute_exec/metal.rs
++++ b/crates/reims-vgpu/src/runtime/compute_exec/metal.rs
+@@ -159,7 +159,7 @@ pub(crate) fn nested_job_from_icb_buffers(
+ /// The pointers borrow `staged`, so the returned vector must not outlive it.
+ /// `backing_*` stay null: a staged buffer owns its bytes, and only the
+ /// indirect-argument path fills a backing allocation in afterwards.
+-#[cfg(all(target_os = "macos", feature = "backend-metal"))]
++#[cfg(feature = "backend-metal")]
+ fn abi_buffers(staged: &mut [StagedBuffer]) -> Vec<crate::backend::metal::abi::ReimsVgpuBuffer> {
+     use crate::backend::metal::abi::ReimsVgpuBuffer;
+     staged
+diff --git a/crates/reims-vgpu/src/runtime/compute_exec/mod.rs b/crates/reims-vgpu/src/runtime/compute_exec/mod.rs
+index 215ac0a4..6d8920d1 100644
+--- a/crates/reims-vgpu/src/runtime/compute_exec/mod.rs
++++ b/crates/reims-vgpu/src/runtime/compute_exec/mod.rs
+@@ -3336,7 +3336,7 @@ use reims_vgpu_protocol::extent::Extent3;
+ // The two rails. Named rather than re-exported flat: each owns a dispatch
+ // executor with the same neutral signature, and this module reaches whichever
+ // one the process runs on only through `Backend`.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ pub mod metal;
+ #[cfg(feature = "backend-vulkan")]
+ pub mod stall_watchdog;
+diff --git a/crates/reims-vgpu/src/runtime/compute_exec/tests.rs b/crates/reims-vgpu/src/runtime/compute_exec/tests.rs
+index 4a9d9f3d..8b6ff2be 100644
+--- a/crates/reims-vgpu/src/runtime/compute_exec/tests.rs
++++ b/crates/reims-vgpu/src/runtime/compute_exec/tests.rs
+@@ -77,10 +77,7 @@ use crate::runtime::decode::resource::{
+     OBJECT_TYPE_MAPPER_REF_TEXTURE, RESOURCE_PAGE_SHIFT,
+ };
+ /// Compute-pipeline descriptor constants used by the backend execute test.
+-#[cfg(any(
+-    feature = "backend-vulkan",
+-    all(feature = "backend-metal", target_os = "macos")
+-))]
++#[cfg(any(feature = "backend-vulkan", feature = "backend-metal"))]
+ use crate::runtime::decode::resource::{
+     OBJECT_TYPE_FUNCTION, PIPELINE_TAG_KERNEL_FUNC, SERIALIZER_OBJECT_COMPUTE_PIPELINE,
+     SERIALIZER_OBJECT_FIRST_TLVS,
+@@ -701,7 +698,7 @@ fn a_compute_refusal_names_its_check_and_ok_names_nothing() {
+              class=missing_texture pipe=7"
+     );
+ 
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     {
+         let status = crate::backend::metal::error::Status::args(
+             "metal_compute_reflection_usage_output_missing",
+@@ -923,7 +920,7 @@ fn dispatch_missing_pipeline_not_nometal() {
+ /// it came from. The assertions below are on the line's shape, so a fourth
+ /// spelling has to fail here before it can reach the log.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn a_format_with_no_storage_selector_refuses_the_same_way_from_every_rail() {
+     use crate::runtime::compute_exec::metal::{split_staged_textures, MetalStage};
+     use crate::runtime::compute_exec::{ComputeStatus, StagedTexture};
+@@ -991,10 +988,7 @@ fn a_format_with_no_storage_selector_refuses_the_same_way_from_every_rail() {
+ }
+ 
+ #[test]
+-#[cfg(any(
+-    feature = "backend-vulkan",
+-    all(feature = "backend-metal", target_os = "macos")
+-))]
++#[cfg(any(feature = "backend-vulkan", feature = "backend-metal"))]
+ fn dispatch_buffer_kernel_mul3add1() {
+     use std::path::PathBuf;
+     let mtlb_paths = [
+diff --git a/crates/reims-vgpu/src/runtime/compute_session/mod.rs b/crates/reims-vgpu/src/runtime/compute_session/mod.rs
+index 63f754fc..a205c71f 100644
+--- a/crates/reims-vgpu/src/runtime/compute_session/mod.rs
++++ b/crates/reims-vgpu/src/runtime/compute_session/mod.rs
+@@ -45,7 +45,7 @@ pub enum SequencingBlock {
+ 
+ // The Metal rail's encoder. Named, not re-exported: this module owns the
+ // segment's sequencing and nothing here should be able to name an `MTLDevice`.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ pub(crate) mod metal;
+ 
+ /// The mutable state of one `SEGMENT_TYPE_COMPUTE` segment.
+@@ -143,25 +143,25 @@ mod tests {
+     // The Metal rail by name, not `backend::selected()`: these tests open a
+     // Metal compute session and assert what it does with it, and a binary
+     // carrying both rails may be *running* the other one.
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     use crate::backend::metal::MetalBackend;
+     use crate::model::{DeviceId, PAGE_SHIFT_ARM64E};
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     use crate::protocol::endian::{st32, st64};
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     use crate::runtime::decode::resource::{
+         list_object_entry_offset, OBJECT_LIST_ENTRY_LEN, OBJECT_TYPE_BUFFER, RESOURCE_PAGE_SHIFT,
+     };
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     use crate::runtime::gva_mem;
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     use crate::runtime::gva_mem::write_task_gva_arm64e;
+ 
+     use crate::runtime::host::FakeHost;
+ 
+     /// A `dispatchThreadgroups:threadsPerThreadgroup:` record, as the lift
+     /// makes it.
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     fn threadgroups(
+         groups: [u64; 3],
+         threads_per_group: [u64; 3],
+@@ -178,7 +178,7 @@ mod tests {
+         })
+     }
+ 
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     #[test]
+     fn metal_reflection_status_survives_the_session_handoff() {
+         use crate::observe::{Emit, Refusal as _};
+@@ -200,9 +200,9 @@ mod tests {
+         );
+     }
+ 
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     #[test]
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     fn control_if_else_spi_session_commits() {
+         let mut host = FakeHost::new();
+         let mut state = DeviceState::new(DeviceId(1), PAGE_SHIFT_ARM64E);
+@@ -266,7 +266,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     fn nested_dispatch_under_if_writeback() {
+         use crate::runtime::compute_exec::ComputeBufferBind;
+         use crate::runtime::decode::resource::{
+diff --git a/crates/reims-vgpu/src/runtime/decode/resource/mod.rs b/crates/reims-vgpu/src/runtime/decode/resource/mod.rs
+index a0620256..1c53b447 100644
+--- a/crates/reims-vgpu/src/runtime/decode/resource/mod.rs
++++ b/crates/reims-vgpu/src/runtime/decode/resource/mod.rs
+@@ -1347,7 +1347,7 @@ pub use reims_vgpu_protocol::blend::{
+ /// builds a sampler for the Metal ICB encoder and is gated the same way. Naming
+ /// that cfg here rather than reaching for `allow(dead_code)` is what keeps the
+ /// Vulkan arm able to say these are unreferenced if the consumer ever goes.
+-#[cfg(all(test, feature = "backend-metal", target_os = "macos"))]
++#[cfg(all(test, feature = "backend-metal"))]
+ pub(crate) mod sampler_desc {
+     use super::{offset_of, w_smp, OP_HDR};
+ 
+diff --git a/crates/reims-vgpu/src/runtime/draw/metal/icb.rs b/crates/reims-vgpu/src/runtime/draw/metal/icb.rs
+index efc972af..dcb82fe1 100644
+--- a/crates/reims-vgpu/src/runtime/draw/metal/icb.rs
++++ b/crates/reims-vgpu/src/runtime/draw/metal/icb.rs
+@@ -1,7 +1,7 @@
+ //! Execute a host ICB on a render encoder over the request's color RTs:
+ //! parent-encoder inheritance, the Metal execute itself, and color writeback.
+ //!
+-//! The whole module is gated on `all(backend-metal, target_os = "macos")` at
++//! The whole module is gated on `feature = "backend-metal"` at
+ //! its declaration in [`super`], which also re-exports these items flat so
+ //! callers keep addressing them as `crate::runtime::draw::<name>`. The
+ //! `backend-vulkan` arm of `encode_icb_execute_and_writeback` is a stub that
+diff --git a/crates/reims-vgpu/src/runtime/draw/mod.rs b/crates/reims-vgpu/src/runtime/draw/mod.rs
+index 61240b93..cc7f7d91 100644
+--- a/crates/reims-vgpu/src/runtime/draw/mod.rs
++++ b/crates/reims-vgpu/src/runtime/draw/mod.rs
+@@ -75,7 +75,7 @@ pub(crate) use vulkan::coverage_band_for_test;
+ // own an `encode_draw_chain` with the same signature — that is the point — so
+ // flattening either one into this module would make the two collide and is why
+ // a build could previously carry only one of them.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ pub mod metal;
+ 
+ // Texture-view texture-view resolution and linear texture loads. Backend-independent,
+@@ -673,10 +673,7 @@ pub struct DrawEncodeRequest {
+ /// Backend-agnostic on purpose: both encode arms degrade, so both need the same
+ /// dedupe. While this was Vulkan-only the Metal arm had no way to report a
+ /// degradation without flooding per draw, and reported none.
+-#[cfg(any(
+-    feature = "backend-vulkan",
+-    all(feature = "backend-metal", target_os = "macos")
+-))]
++#[cfg(any(feature = "backend-vulkan", feature = "backend-metal"))]
+ fn degrade_log_first(pipeline_ref: u32, slug: &'static str) -> bool {
+     use std::collections::HashSet;
+     use std::sync::Mutex;
+@@ -1412,7 +1409,7 @@ pub(crate) fn note_sampled_narrowing(
+ /// the load direction's and has no counterpart. Naming the decision does not
+ /// fix it; it makes the size of it countable, and it gives the fix one place to
+ /// happen.
+-#[cfg(any(test, all(feature = "backend-metal", target_os = "macos")))]
++#[cfg(any(test, feature = "backend-metal"))]
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ pub(crate) enum ColorTargetNarrowing {
+     /// The guest declared an eight-bit colour order, so an `RGBA8Unorm`
+@@ -1435,7 +1432,7 @@ pub(crate) enum ColorTargetNarrowing {
+ /// bytes and nothing downstream can tell a narrowed target from a native one.
+ /// That is [`pixel_format::narrows_to_unorm8`]'s argument one stage earlier in
+ /// the pipeline.
+-#[cfg(any(test, all(feature = "backend-metal", target_os = "macos")))]
++#[cfg(any(test, feature = "backend-metal"))]
+ pub(crate) fn color_target_narrowing(declared_format: u16) -> ColorTargetNarrowing {
+     use pixel_format::TexelLayout;
+     match pixel_format::store_texel_order(declared_format) {
+@@ -1458,7 +1455,7 @@ pub(crate) fn color_target_narrowing(declared_format: u16) -> ColorTargetNarrowi
+ ///
+ /// The count is unconditional and the line is once, so a reader gets the size of
+ /// the loss from the census and its shape from the log.
+-#[cfg(any(test, all(feature = "backend-metal", target_os = "macos")))]
++#[cfg(any(test, feature = "backend-metal"))]
+ pub(crate) fn note_store_narrowing(declared_format: u16, w: u32, h: u32) {
+     let (slug, detail) = match color_target_narrowing(declared_format) {
+         ColorTargetNarrowing::None => return,
+@@ -1629,7 +1626,7 @@ fn resolve_index_window_reason<M: HostMemory>(
+ /// `DrawPreparationDecline::IndexLoad`, so both rails keep one reason vocabulary.
+ /// Runs on the drain worker (off main core); only reached when `req.indexed` is
+ /// set, so it cannot flood a 2D-UI boot.
+-#[cfg(any(test, all(feature = "backend-metal", target_os = "macos")))]
++#[cfg(any(test, feature = "backend-metal"))]
+ fn load_index_bytes_reason<M: HostMemory + HostOps>(
+     state: &DeviceState,
+     host: &M,
+@@ -1662,7 +1659,7 @@ fn load_index_bytes_reason<M: HostMemory + HostOps>(
+ ///
+ /// Without this, Clear+partial scissor left boot-logo / wallpaper under window
+ /// chrome on the lagging dual-mid (seed=clear skipped outside-scissor rows).
+-#[cfg(any(test, all(feature = "backend-metal", target_os = "macos")))]
++#[cfg(any(test, feature = "backend-metal"))]
+ pub(crate) fn store_seed_policy(
+     force_full_store: bool,
+     load_action: u16,
+@@ -1728,10 +1725,7 @@ pub fn load_composite_premult_one_omsa(draw_rgba: &[u8], seed_rgba: &[u8]) -> (V
+ /// treat it as DontCare — which discards whatever the attachment held, so a
+ /// pass the guest meant to composite onto goes blank. Only the Metal arm said
+ /// so; the Vulkan arm took the same value into a `_ => {}`.
+-#[cfg(any(
+-    feature = "backend-vulkan",
+-    all(feature = "backend-metal", target_os = "macos")
+-))]
++#[cfg(any(feature = "backend-vulkan", feature = "backend-metal"))]
+ pub(crate) fn load_action_in_contract(pipeline_ref: u32, load_action: u16) -> bool {
+     if is_declared_load_action(load_action) {
+         return true;
+@@ -1758,10 +1752,7 @@ pub(crate) fn load_action_in_contract(pipeline_ref: u32, load_action: u16) -> bo
+ /// implements resolve-only for the supported shape and names every other
+ /// resolve action as a typed refusal; the direct-Metal path likewise refuses
+ /// before encoding until it carries the corresponding attachment lifecycle.
+-#[cfg(any(
+-    feature = "backend-vulkan",
+-    all(feature = "backend-metal", target_os = "macos")
+-))]
++#[cfg(any(feature = "backend-vulkan", feature = "backend-metal"))]
+ pub(crate) fn store_action_in_contract(pipeline_ref: u32, store_action: u16) -> bool {
+     if is_declared_store_action(store_action) {
+         return true;
+@@ -3224,7 +3215,7 @@ pub(crate) fn write_gva_frame_within_skipping<M: HostMemory + HostOps>(
+ /// that happens to call it would put the guest-memory bound on the one matrix
+ /// arm that cannot be built or run from a Linux host.
+ #[cfg_attr(
+-    not(all(feature = "backend-metal", target_os = "macos")),
++    not(feature = "backend-metal"),
+     allow(
+         dead_code,
+         reason = "only the Metal encode path scissors a guest store; the bound is tested everywhere"
+diff --git a/crates/reims-vgpu/src/runtime/draw/tests.rs b/crates/reims-vgpu/src/runtime/draw/tests.rs
+index 180b3a55..a78e9a1d 100644
+--- a/crates/reims-vgpu/src/runtime/draw/tests.rs
++++ b/crates/reims-vgpu/src/runtime/draw/tests.rs
+@@ -1061,7 +1061,7 @@ fn encode_status_renders_its_check_beside_the_class_it_collapsed_to() {
+     assert_eq!(EncodeStatus::Ok.refusal(), None);
+     assert_eq!(EncodeStatus::Ok.class(), "ok");
+ 
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     {
+         let backend =
+             crate::backend::metal::error::Status::execute("metal_render_command_buffer_failed");
+@@ -2506,7 +2506,7 @@ fn a_live_bind_past_its_table_is_reported_and_a_cleared_one_is_not() {
+ /// covered by `a_bind_past_its_table_refuses_the_draw_before_anything_resolves`
+ /// in that module — and that one does run on a Linux host, so the shared check
+ /// is exercised even though this case cannot be.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ #[test]
+ fn the_metal_draw_arm_refuses_a_bind_past_its_table() {
+     let mut state = DeviceState::new(DeviceId(1), PAGE_SHIFT_X86);
+@@ -6778,10 +6778,7 @@ fn a_pass_dropped_for_an_unresolvable_colour_slot_is_counted_every_time() {
+ /// key has to separate slugs as well as pipelines, or one degradation would
+ /// mask a different one on the same pipeline — which is the case the Metal arm
+ /// hits, since its depth and stencil substitutions can both fire on one pass.
+-#[cfg(any(
+-    feature = "backend-vulkan",
+-    all(feature = "backend-metal", target_os = "macos")
+-))]
++#[cfg(any(feature = "backend-vulkan", feature = "backend-metal"))]
+ #[test]
+ fn a_degradation_reports_once_per_pipeline_and_slug() {
+     // Pipeline refs local to this test so a sibling cannot consume the first
+diff --git a/crates/reims-vgpu/src/runtime/draw/texture_view.rs b/crates/reims-vgpu/src/runtime/draw/texture_view.rs
+index 440eedf6..041fe681 100644
+--- a/crates/reims-vgpu/src/runtime/draw/texture_view.rs
++++ b/crates/reims-vgpu/src/runtime/draw/texture_view.rs
+@@ -538,7 +538,7 @@ pub(crate) fn effective_view_sample_format_reasoned(
+ /// is a texture that gave up its zero-copy crossing to be remapped by hand. The
+ /// Metal-direct pathway still needs it, so it reports itself rather than being
+ /// deleted.
+-#[cfg(any(test, all(feature = "backend-metal", target_os = "macos")))]
++#[cfg(any(test, feature = "backend-metal"))]
+ pub(super) fn apply_view_swizzle_rgba8(
+     rgba: &mut [u8],
+     plan: Option<&pixel_format::SwizzlePlan>,
+diff --git a/crates/reims-vgpu/src/runtime/icb/mod.rs b/crates/reims-vgpu/src/runtime/icb/mod.rs
+index eea5ddcb..f55cf730 100644
+--- a/crates/reims-vgpu/src/runtime/icb/mod.rs
++++ b/crates/reims-vgpu/src/runtime/icb/mod.rs
+@@ -59,7 +59,7 @@ use std::sync::OnceLock;
+ /// `MTL*` types that do not exist without it. *Whether the Metal rail is the
+ /// one running* is never asked here: nothing in this module calls into it, and
+ /// its own callers are already inside that rail.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ pub mod metal;
+ 
+ /// A refusal on the indirect-command-buffer rail.
+@@ -224,10 +224,7 @@ pub enum IcbRenderBindStage {
+     Mesh,
+ }
+ 
+-#[cfg_attr(
+-    not(all(feature = "backend-metal", target_os = "macos")),
+-    allow(dead_code)
+-)]
++#[cfg_attr(not(feature = "backend-metal"), allow(dead_code))]
+ impl IcbRenderBindStage {
+     /// The bind count the create descriptor declared for this stage.
+     ///
+@@ -279,10 +276,7 @@ impl IcbRenderBindStage {
+ /// still calls it was held by a source scan that could see across the `cfg`;
+ /// nothing does now, so a Metal-arm change that drops the call would leave this
+ /// function green and the bind unbounded.
+-#[cfg_attr(
+-    not(all(feature = "backend-metal", target_os = "macos")),
+-    allow(dead_code)
+-)]
++#[cfg_attr(not(feature = "backend-metal"), allow(dead_code))]
+ pub(crate) fn refuse_render_bind_past_declared_max(
+     stage: IcbRenderBindStage,
+     index: u32,
+diff --git a/crates/reims-vgpu/src/runtime/icb/tests.rs b/crates/reims-vgpu/src/runtime/icb/tests.rs
+index 0f8b0ddd..a07cce84 100644
+--- a/crates/reims-vgpu/src/runtime/icb/tests.rs
++++ b/crates/reims-vgpu/src/runtime/icb/tests.rs
+@@ -5,16 +5,16 @@ use super::*;
+ /// The Metal rail's half of this module, whose items every host-ICB test here
+ /// names directly. Glob-imported like [`super`] itself so the split into
+ /// `icb::metal` did not have to be spelled at four hundred call sites.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use super::metal::*;
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use crate::backend::metal::MetalBackend;
+ use crate::model::{DeviceId, PAGE_SHIFT_ARM64E};
+ use crate::protocol::endian::{st16, st32, st64};
+ use crate::protocol::gva::{DIRECTORY_DEPTH, DIRECTORY_ROOT_PFN};
+ /// Page-entry bits for hand-mapping a draw target. Metal-arm only, same reason
+ /// as the compute-pipeline block below.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use crate::protocol::iosurface_pages::{PAGE_ENTRY_PFN_SHIFT, PAGE_ENTRY_VALID};
+ use crate::protocol::pixel_format::MTL_FORMAT_BGRA8_UNORM;
+ use crate::runtime::decode::resource::{
+@@ -30,24 +30,24 @@ use crate::runtime::decode::resource::{
+ /// Compute-pipeline and function descriptor constants, used only by the
+ /// Metal-arm execute tests below. Kept in their own gated `use` so the Vulkan arm
+ /// does not carry unused imports.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use crate::runtime::decode::resource::{
+     OBJECT_TYPE_FUNCTION, PIPELINE_TAG_KERNEL_FUNC, SERIALIZER_OBJECT_COMPUTE_PIPELINE,
+     SERIALIZER_OBJECT_FIRST_TLVS,
+ };
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use crate::runtime::draw::metal::encode_icb_execute_and_writeback;
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use crate::runtime::draw::{BufferBind, ColorRtRequest, DrawEncodeRequest, EncodeStatus};
+ use crate::runtime::gva_mem;
+ use crate::runtime::host::FakeHost;
+ /// Readback, the draw encoder and the fixture directory. Every Metal-arm ICB
+ /// test needs this same set; it was spelled inside 29 test bodies before.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use crate::runtime::mapping_write;
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use reims_vgpu_protocol::pass_action::MTL_STORE_ACTION_STORE;
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use std::path::PathBuf;
+ use std::sync::Mutex;
+ 
+@@ -165,7 +165,7 @@ fn unit_mesh_threads_draw() -> IcbRenderDraw {
+ ///
+ /// The guard is returned rather than taken inside, because it has to outlive
+ /// the body — `clear_icb_cache` and the ICB cache it clears are process-global.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn mul3add1_fixture() -> (
+     std::sync::MutexGuard<'static, ()>,
+     Vec<u8>,
+@@ -200,7 +200,7 @@ fn icb_device() -> (FakeHost, DeviceState) {
+ /// A shader blob out of `tests/fixtures`. Forty-four reads spelled out the
+ /// join and then repeated the file name in the `expect`, which reported the
+ /// name and swallowed the `io::Error` saying *why*; this reports both.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn read_fixture(name: &str) -> Vec<u8> {
+     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+         .join("tests/fixtures")
+@@ -214,7 +214,7 @@ fn read_fixture(name: &str) -> Vec<u8> {
+ /// Both are constant across every caller — they are what `icb_device` and
+ /// `mul3add1_fixture` set up — so they were four lines of noise in front of the
+ /// `IcbRenderFill` that is the actual subject of each test.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render(
+     state: &DeviceState,
+     host: &FakeHost,
+@@ -224,7 +224,7 @@ fn fill_render(
+ }
+ 
+ /// [`fill_compute_command`] against the same fixture. See [`fill_render`].
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_compute(
+     state: &DeviceState,
+     host: &FakeHost,
+@@ -236,7 +236,7 @@ fn fill_compute(
+ /// The guest's `ExecuteCommandsInBuffer` (0xe4) over `[location, length)` of
+ /// ICB object `icb_ref` — the command eight bodies build field by field on a
+ /// `Default` before handing it to `ComputeSession::encode_icb`.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn execute_icb_command(
+     icb_ref: u32,
+     location: u64,
+@@ -255,7 +255,7 @@ fn execute_icb_command(
+ /// The four little-endian `u32`s at task 1's `gva`, which is what every
+ /// compute-writeback body in this file checks its kernel by. Panics rather than
+ /// returning: a read that fails here is the fixture broken, not the assertion.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn read_u32x4(host: &FakeHost, state: &DeviceState, gva: u64) -> Vec<u32> {
+     let mut back = [0u8; 16];
+     gva_mem::read_task_gva(host, &state.tasks[1], gva, &mut back, PAGE_SHIFT_ARM64E)
+@@ -372,7 +372,7 @@ fn make_icb_desc_bytes_tg(
+ }
+ 
+ /// Render ICB create body (Draw and/or DrawIndexed commandTypes).
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn make_render_icb_desc_bytes(
+     max_cmds: u32,
+     max_vertex: u16,
+@@ -382,7 +382,7 @@ fn make_render_icb_desc_bytes(
+     make_render_icb_desc_bytes_ex(max_cmds, max_vertex, max_fragment, 0, 0, command_types, 0)
+ }
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn make_render_icb_desc_bytes_flags(
+     max_cmds: u32,
+     max_vertex: u16,
+@@ -401,7 +401,7 @@ fn make_render_icb_desc_bytes_flags(
+     )
+ }
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn make_render_icb_desc_bytes_ex(
+     max_cmds: u32,
+     max_vertex: u16,
+@@ -445,14 +445,14 @@ fn make_render_icb_desc_bytes_ex(
+     b
+ }
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn load_oracle_mtlb() -> (Vec<u8>, Vec<u8>) {
+     let vtx = read_fixture("oracle_draw_vtx.mtlb");
+     let frag = read_fixture("oracle_draw_frag.mtlb");
+     (vtx, frag)
+ }
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn load_stagein_mtlb() -> (Vec<u8>, Vec<u8>) {
+     let vtx = read_fixture("render_stagein_vtx.mtlb");
+     let frag = read_fixture("render_stagein_frag.mtlb");
+@@ -462,7 +462,7 @@ fn load_stagein_mtlb() -> (Vec<u8>, Vec<u8>) {
+ /// Minimal compute pipeline serializer-object descriptor: one first-TLV entry naming the
+ /// kernel function ref. Eight call sites built these same seven lines. Gated
+ /// like its constants and all eight callers, which are Metal-arm execute tests.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn make_compute_pipeline_desc(kernel_ref: u32) -> Vec<u8> {
+     let mut pdesc = vec![0u8; 32];
+     st32(&mut pdesc[0..], SERIALIZER_OBJECT_COMPUTE_PIPELINE);
+@@ -479,7 +479,7 @@ fn make_compute_pipeline_desc(kernel_ref: u32) -> Vec<u8> {
+ /// attachment, unlike [`make_stagein_render_pipeline_desc`]. Six call sites
+ /// built these same twelve lines. Gated like its constants and all six callers,
+ /// which are Metal-arm execute tests.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn make_render_pipeline_desc(vert_ref: u32, frag_ref: u32) -> Vec<u8> {
+     let mut pdesc = vec![0u8; 16 + 1 + 6 + 6];
+     let blen = pdesc.len() as u32;
+@@ -589,7 +589,7 @@ fn make_stagein_render_pipeline_desc(vert_ref: u32, frag_ref: u32) -> Vec<u8> {
+ 
+ /// Compact serializer-object mesh pipeline (host SPI shape): tag `0x14` section offset
+ /// + optional object `0x01` + mesh `0x02` + fragment `0x03`.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn make_mesh_render_pipeline_desc(
+     object_ref: Option<u32>,
+     mesh_ref: u32,
+@@ -629,7 +629,7 @@ fn make_mesh_render_pipeline_desc(
+     b
+ }
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn put_buffer(host: &mut FakeHost, state: &DeviceState, obj_ref: u32, handle: u32, bytes: &[u8]) {
+     let gva = (handle as u64) << RESOURCE_PAGE_SHIFT;
+     gva_mem::write_task_gva_arm64e(host, &state.tasks[1], gva, bytes);
+@@ -669,7 +669,7 @@ fn put_object(
+ /// two fixtures never share a guest page. The mapping is marked internal and
+ /// mapped by hand because `map_surface` alone leaves it without page entries,
+ /// which is the state a real `MapMemory2` would have already left behind.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ /// Read back [`map_draw_target`]'s 4x4 surface and assert every texel is the
+ /// colour the ICB test shaders write: `float4(0.4, 0.267, 0.133, 1)`, which is
+ /// BGRA 34, 68, 102, 255.
+@@ -690,7 +690,7 @@ fn assert_target_is_shader_solid(
+ /// surface id so a test can tell which surface the stage-in attributes came
+ /// from. Tolerance is +/-1 rather than +/-2 because these write exact byte
+ /// values rather than a float4 that has to round.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn assert_stagein_solid(
+     state: &mut DeviceState,
+     host: &mut FakeHost,
+@@ -711,7 +711,7 @@ fn assert_stagein_solid(
+ /// Read back [`map_draw_target`]'s 4x4 surface and assert every texel is `want`
+ /// within `tol` per channel. `what` names the command shape under test so a
+ /// failure says which of the twenty-nine callers produced the wrong pixels.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn assert_target_texels(
+     state: &mut DeviceState,
+     host: &mut FakeHost,
+@@ -746,7 +746,7 @@ fn assert_target_texels(
+     }
+ }
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ /// The one-triangle draw every ICB pixel test issues into [`map_draw_target`]'s
+ /// surface: pipeline 6, three vertices, one instance, triangles, over a
+ /// zero-filled 4x4 BGRA8 seed.
+@@ -774,7 +774,7 @@ fn draw_request(mapping_id: u32) -> DrawEncodeRequest {
+     }
+ }
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ /// Publish an MTLB `blob` at `blob_page`'s GVA page and describe it as function
+ /// object `ref_`, whose 32-byte descriptor lives at `desc_gva` and carries
+ /// `(blob gva, blob len)`. Fifty-six test bodies spelled these six lines.
+@@ -798,7 +798,7 @@ fn put_function_object(
+     put_object(host, state, ref_, OBJECT_TYPE_FUNCTION, desc_gva, &fdesc);
+ }
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ /// Publish an encoded ICB command-memory `slot` at `cmd_handle`'s page, wrap it
+ /// in buffer object 10, and associate that buffer with ICB object 9 — the
+ /// sequence `execute` performs before any fill, spelled in thirteen test bodies
+@@ -831,7 +831,7 @@ fn associate_icb_command_memory(
+         .expect("associate ICB command memory");
+ }
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn map_draw_target(host: &mut FakeHost, state: &mut DeviceState, pfn: u32) -> u32 {
+     let mapping_id = 9u32;
+     host.map_range((pfn as u64) << PAGE_SHIFT_ARM64E, 0x4000, 0);
+@@ -978,7 +978,7 @@ fn a_flag_this_device_does_not_apply_is_counted_when_the_guest_asks_for_it() {
+ }
+ 
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn materialize_and_execute_empty_range() {
+     use crate::backend::metal::raw_metal::execute_commands_in_buffer;
+     use crate::backend::metal::runtime::{system_device, thread_queue};
+@@ -1011,7 +1011,7 @@ fn materialize_and_execute_empty_range() {
+ }
+ 
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_and_execute_mul3add1_writeback() {
+     use crate::backend::Backend as _;
+ 
+@@ -1327,7 +1327,7 @@ fn decode_encode_draw_patches_slot_roundtrip() {
+ /// Pixel-level ICB DrawPatches oracle: triangle patch + constant tess
+ /// factors 1.0 → solid BGRA fill (full-screen control points).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_draw_patches_tessellation_oracle() {
+     use crate::runtime::decode::resource::MTL_INDIRECT_CMD_DRAW_PATCHES;
+ 
+@@ -1433,7 +1433,7 @@ fn fill_render_draw_patches_tessellation_oracle() {
+ /// Pixel-level ICB DrawIndexedPatches: dummy control point at index 0,
+ /// real triangle at indices [1,2,3] → same solid BGRA as DrawPatches.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_draw_indexed_patches_tessellation_oracle() {
+     use crate::runtime::decode::resource::MTL_INDIRECT_CMD_DRAW_INDEXED_PATCHES;
+ 
+@@ -1727,7 +1727,7 @@ fn decode_encode_draw_mesh_slot_roundtrip() {
+ /// Pixel-level ICB drawMeshThreads: mesh emits full-screen triangle,
+ /// fragment solid BGRA matching tess/draw oracles.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_draw_mesh_threads_oracle() {
+     use crate::runtime::decode::resource::MTL_INDIRECT_CMD_DRAW_MESH_THREADS;
+ 
+@@ -1793,7 +1793,7 @@ fn fill_render_draw_mesh_threads_oracle() {
+ 
+ /// Pixel-level ICB drawMeshThreadgroups (same solid BGRA).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_draw_mesh_threadgroups_oracle() {
+     use crate::runtime::decode::resource::MTL_INDIRECT_CMD_DRAW_MESH_THREADGROUPS;
+ 
+@@ -1924,7 +1924,7 @@ fn decode_encode_signed_base_vertex() {
+ /// DrawIndexed with `baseVertex = -1`: indices `[1,2,3]` + offset → verts 0,1,2
+ /// of a stage_in clip-space triangle (same solid as baseVertex 0 / indices 0,1,2).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_negative_base_vertex_stagein_oracle() {
+     let _guard = icb_test_guard();
+ 
+@@ -2038,7 +2038,7 @@ fn decode_encode_command_slot_roundtrip() {
+ }
+ 
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn buffer_backed_fill_execute_mul3add1() {
+     use crate::backend::Backend as _;
+ 
+@@ -2241,7 +2241,7 @@ fn a_0x1d1_query_is_refused_and_binds_nothing() {
+ /// Product DrawIndexed ICB fill + execute: oracle fullscreen triangle via
+ /// indices [0,1,2], fragment constant color → solid BGRA writeback.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_draw_indexed_execute_oracle() {
+     let _guard = icb_test_guard();
+ 
+@@ -2324,7 +2324,7 @@ fn fill_render_draw_indexed_execute_oracle() {
+ 
+ /// Buffer-backed DrawIndexed: encode slot → 0x1d1 associate → execute re-fill.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn buffer_backed_render_draw_indexed_fill_execute() {
+     let _guard = icb_test_guard();
+ 
+@@ -2408,7 +2408,7 @@ fn buffer_backed_render_draw_indexed_fill_execute() {
+ /// encode slot → buffer command memory → `0x1d1` associate → execute
+ /// re-fills via `fill_icb_from_command_memory` → solid BGRA.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_draw_patches_tessellation_e2e() {
+     use crate::runtime::decode::resource::{
+         render_draw_patches_icb_layout, MTL_INDIRECT_CMD_DRAW_PATCHES,
+@@ -2523,7 +2523,7 @@ fn wire_backed_draw_patches_tessellation_e2e() {
+ /// Dedicated wire-backed E2E: DrawIndexedPatches tessellation (not via
+ /// host fill API or DrawPatches-only path).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_draw_indexed_patches_tessellation_e2e() {
+     use crate::runtime::decode::resource::{
+         render_draw_indexed_patches_icb_layout, MTL_INDIRECT_CMD_DRAW_INDEXED_PATCHES,
+@@ -2650,7 +2650,7 @@ fn wire_backed_draw_indexed_patches_tessellation_e2e() {
+ /// Object+mesh host fill: dual-function metallib (object texture-view + mesh serializer-object)
+ /// → drawMeshThreadgroups → solid BGRA (object sets mesh grid via payload).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_object_mesh_threadgroups_oracle() {
+     use crate::runtime::decode::resource::MTL_INDIRECT_CMD_DRAW_MESH_THREADGROUPS;
+ 
+@@ -2731,7 +2731,7 @@ fn fill_render_object_mesh_threadgroups_oracle() {
+ /// serializer-object vertex slot (no mesh SPI tag 0x14) through command memory.
+ /// Not claimed via mesh SPI separate-ref E2E.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_dual_export_object_mesh_e2e() {
+     use crate::runtime::decode::resource::{
+         decode_render_pipeline_descriptor, render_draw_mesh_threadgroups_icb_layout,
+@@ -2815,7 +2815,7 @@ fn wire_backed_dual_export_object_mesh_e2e() {
+ /// Separate object + mesh + fragment function refs via mesh SPI serializer-object
+ /// tags 0x01 / 0x02 / 0x03 under section tag 0x14 (not dual-export).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_separate_object_mesh_func_refs_oracle() {
+     use crate::runtime::decode::resource::{
+         decode_render_pipeline_descriptor, MTL_INDIRECT_CMD_DRAW_MESH_THREADGROUPS,
+@@ -2908,7 +2908,7 @@ fn fill_render_separate_object_mesh_func_refs_oracle() {
+ /// mesh/frag refs 0x01/0x02/0x03) through command memory — not dual-export
+ /// and not host `fill_render_command` API.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_mesh_spi_pipeline_e2e() {
+     use crate::runtime::decode::resource::{
+         decode_render_pipeline_descriptor, render_draw_mesh_threadgroups_icb_layout,
+@@ -2991,7 +2991,7 @@ fn wire_backed_mesh_spi_pipeline_e2e() {
+ 
+ /// Pixel: setMeshBuffer — mesh stage reads scale from buffer(0).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_mesh_buffer_bind_oracle() {
+     use crate::runtime::decode::resource::MTL_INDIRECT_CMD_DRAW_MESH_THREADS;
+ 
+@@ -3069,7 +3069,7 @@ fn fill_render_mesh_buffer_bind_oracle() {
+ 
+ /// Pixel: setObjectBuffer — object stage reads scale from buffer(0) → payload.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_object_buffer_bind_oracle() {
+     use crate::runtime::decode::resource::MTL_INDIRECT_CMD_DRAW_MESH_THREADGROUPS;
+ 
+@@ -3147,7 +3147,7 @@ fn fill_render_object_buffer_bind_oracle() {
+ /// Wire-backed E2E: encode mesh buffer bind + MeshThreads → command memory
+ /// → 0x1d1 → fill_icb_from_command_memory → execute (setMeshBuffer path).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_mesh_buffer_bind_e2e() {
+     use crate::runtime::decode::resource::{
+         encode_icb_command_layout, render_draw_mesh_threads_icb_layout_with_binds, ICB_DESC_LAYOUT,
+@@ -3237,7 +3237,7 @@ fn wire_backed_mesh_buffer_bind_e2e() {
+ /// Wire-backed E2E: encode object buffer bind + MeshThreadgroups → command
+ /// memory → 0x1d1 → fill_icb_from_command_memory → execute (setObjectBuffer).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_object_buffer_bind_e2e() {
+     use crate::runtime::decode::resource::{
+         encode_icb_command_layout, render_draw_mesh_threadgroups_icb_layout_ex, ICB_DESC_LAYOUT,
+@@ -3372,7 +3372,7 @@ fn decode_encode_object_tg_memory_mesh_slot() {
+ 
+ /// Dedicated: non-multiple-of-16 object TG length is fail-closed (Args).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_object_tg_memory_bad_length_rejected() {
+     use crate::runtime::decode::resource::MTL_INDIRECT_CMD_DRAW_MESH_THREADGROUPS;
+ 
+@@ -3449,7 +3449,7 @@ fn fill_render_object_tg_memory_bad_length_rejected() {
+ 
+ /// Dedicated host-fill: object TG length 16 used by object shader → solid BGRA.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_object_tg_memory_oracle() {
+     use crate::runtime::decode::resource::MTL_INDIRECT_CMD_DRAW_MESH_THREADGROUPS;
+ 
+@@ -3533,7 +3533,7 @@ fn fill_render_object_tg_memory_oracle() {
+ 
+ /// Dedicated wire-backed E2E: object TG length 16 through command memory.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_object_tg_memory_e2e() {
+     use crate::runtime::decode::resource::{
+         encode_icb_command_layout, render_draw_mesh_threadgroups_icb_layout_ex, ICB_DESC_LAYOUT,
+@@ -3611,7 +3611,7 @@ fn wire_backed_object_tg_memory_e2e() {
+ /// Same guest path as patches: encode slot into buffer command memory,
+ /// `0x1d1` bind, execute re-fills from wire (no host `fill_render_command`).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_mesh_threads_e2e() {
+     use crate::runtime::decode::resource::{
+         render_draw_mesh_threads_icb_layout, MTL_INDIRECT_CMD_DRAW_MESH_THREADS,
+@@ -3684,7 +3684,7 @@ fn wire_backed_mesh_threads_e2e() {
+ /// Separate from object-buffer E2E so MeshThreadgroups command-memory path
+ /// cannot regress silently when that other test is simplified.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_mesh_threadgroups_e2e() {
+     use crate::runtime::decode::resource::{
+         render_draw_mesh_threadgroups_icb_layout, MTL_INDIRECT_CMD_DRAW_MESH_THREADGROUPS,
+@@ -3760,7 +3760,7 @@ fn wire_backed_mesh_threadgroups_e2e() {
+ /// inheritBuffers=true: ICB slot records only draw+PSO; fragment color
+ /// comes from the parent encoder (stream bind path).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn inherit_buffers_encoder_fragment_color() {
+     let _guard = icb_test_guard();
+ 
+@@ -3858,7 +3858,7 @@ fn inherit_buffers_encoder_fragment_color() {
+ /// comes from the parent render encoder (stream pipeline bind path).
+ /// Mirrors `inherit_pipeline_encoder_kernel_mul3add1` for compute.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn inherit_pipeline_encoder_fragment_color() {
+     use crate::runtime::decode::resource::ICB_FLAG_INHERIT_PIPELINE_STATE;
+ 
+@@ -3965,7 +3965,7 @@ fn stagein_pipeline_fixture_decodes_vertex_attrs() {
+ /// ICB Draw with `[[stage_in]]` vertex descriptor: position buffer +
+ /// fragment color → solid BGRA (render_stagein fixtures).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_stagein_draw_execute_oracle() {
+     let _guard = icb_test_guard();
+ 
+@@ -4051,7 +4051,7 @@ fn fill_render_stagein_draw_execute_oracle() {
+ /// Dedicated wire-backed E2E: classic Draw (`0x1`) with stage_in vertex
+ /// buffer + fragment color — not DrawIndexed and not host fill API.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_draw_primitives_stagein_e2e() {
+     use crate::runtime::decode::resource::{render_icb_layout, MTL_INDIRECT_CMD_DRAW};
+ 
+@@ -4256,7 +4256,7 @@ fn decode_encode_attribute_stride_table() {
+ 
+ /// Host fill with attributeStride on vertex bind — stage_in Draw still solid.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_attribute_stride_stagein_execute() {
+     let _guard = icb_test_guard();
+ 
+@@ -4358,7 +4358,7 @@ fn fill_render_attribute_stride_stagein_execute() {
+ /// memory (not host fill API). Proves stride table encode → decode →
+ /// setVertexBuffer:offset:attributeStride:.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn wire_backed_attribute_stride_stagein_e2e() {
+     use crate::runtime::decode::resource::{render_icb_layout, MTL_INDIRECT_CMD_DRAW};
+ 
+@@ -4520,7 +4520,7 @@ fn decode_encode_barrier_and_threadgroup_memory() {
+ /// Host fill + execute with barrier + threadgroup memory lengths (no shader
+ /// dependency — mul3add1 ignores TG mem; verifies Metal accepts the record).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_compute_barrier_and_tg_memory_execute() {
+     use crate::backend::Backend as _;
+ 
+@@ -4601,7 +4601,7 @@ fn fill_compute_barrier_and_tg_memory_execute() {
+ /// inheritBuffers=true: ICB slot records only PSO+dispatch; kernel buffer
+ /// comes from the parent compute encoder (stream `ComputeAccum`).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn inherit_buffers_encoder_kernel_mul3add1() {
+     use crate::backend::Backend as _;
+     use crate::runtime::compute_exec::{ComputeAccum, ComputeBufferBind};
+@@ -4691,7 +4691,7 @@ fn inherit_buffers_encoder_kernel_mul3add1() {
+ /// inheritPipelineState=true: ICB slot records only buffers+dispatch; PSO
+ /// comes from the parent compute encoder.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn inherit_pipeline_encoder_kernel_mul3add1() {
+     use crate::backend::Backend as _;
+     use crate::runtime::compute_exec::ComputeAccum;
+@@ -4772,7 +4772,7 @@ fn inherit_pipeline_encoder_kernel_mul3add1() {
+ }
+ 
+ /// Install a texture linear texture (single level) and write seed texels.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ // A test fixture builder: object ref, handle, geometry and seed texels.
+ #[allow(clippy::too_many_arguments)]
+ fn put_texture(
+@@ -4814,7 +4814,7 @@ fn put_texture(
+ }
+ 
+ /// Minimal serializer-object sampler (36 B): clamp-to-edge, nearest, normalized coords.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn put_serializer_object_sampler(
+     host: &mut FakeHost,
+     state: &DeviceState,
+@@ -4858,7 +4858,7 @@ fn put_serializer_object_sampler(
+ /// buffer writeback proves execute; texture writeback preserves seed
+ /// (kernel does not touch the texture).
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn icb_parent_encoder_texture_and_sampler_binds() {
+     use crate::backend::Backend as _;
+     use crate::protocol::pixel_format::MTL_FORMAT_RGBA8_UNORM;
+@@ -4985,7 +4985,7 @@ fn icb_parent_encoder_texture_and_sampler_binds() {
+ /// as kernel buffer 0 on the ICB command, and `useResource`d on the parent
+ /// encoder. Oracle: xyplane-v1 `[x,y,5,255]`.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn icb_argument_buffer_storage_texture_xyplane() {
+     use crate::backend::Backend as _;
+     use crate::protocol::pixel_format::MTL_FORMAT_RGBA8_UINT;
+@@ -5098,7 +5098,7 @@ fn icb_argument_buffer_storage_texture_xyplane() {
+ 
+ /// Sampled + storage textures + sampler in one argument buffer under ICB.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn icb_argument_buffer_sample_and_write() {
+     use crate::backend::Backend as _;
+     use crate::protocol::pixel_format::{MTL_FORMAT_RGBA8_UINT, MTL_FORMAT_RGBA8_UNORM};
+@@ -5240,7 +5240,7 @@ fn icb_argument_buffer_sample_and_write() {
+     }
+ }
+ 
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ #[test]
+ fn resolve_bind_offset_from_wire_va() {
+     let (mut host, state) = icb_device();
+@@ -5264,7 +5264,7 @@ fn resolve_bind_offset_from_wire_va() {
+ 
+ /// Host fill with non-zero fragment bind offset into a padded buffer.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn fill_render_nonzero_bind_offset_oracle() {
+     let _guard = icb_test_guard();
+ 
+@@ -5366,7 +5366,7 @@ fn fill_render_nonzero_bind_offset_oracle() {
+ 
+ /// Buffer-backed fill: wire VA = buffer base+offset → resolve → execute.
+ #[test]
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ fn buffer_backed_nonzero_wire_va_offset() {
+     let _guard = icb_test_guard();
+ 
+diff --git a/crates/reims-vgpu/src/runtime/mipmap.rs b/crates/reims-vgpu/src/runtime/mipmap.rs
+index 8af35ad3..2217e318 100644
+--- a/crates/reims-vgpu/src/runtime/mipmap.rs
++++ b/crates/reims-vgpu/src/runtime/mipmap.rs
+@@ -24,7 +24,7 @@ use crate::runtime::objects;
+ // The refusal type is portable data and lives in `protocol::mipmap` so its
+ // checks can be executed on a host with no Apple linker. The import still
+ // carries this gate, because only this arm can produce one.
+-#[cfg(all(feature = "backend-metal", target_os = "macos"))]
++#[cfg(feature = "backend-metal")]
+ use crate::protocol::mipmap::MetalMipmapError;
+ 
+ /// Outcome of a generateMipmaps attempt.
+@@ -54,7 +54,7 @@ pub enum MipmapStatus {
+     /// Guest GVA read/write failed.
+     GuestIo,
+     /// The exact Metal-side check that rejected generation.
+-    #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++    #[cfg(feature = "backend-metal")]
+     Metal(MetalMipmapError),
+ }
+ 
+@@ -76,14 +76,14 @@ impl crate::observe::Refusal for MipmapStatus {
+             Self::UnsupportedFormat => "mipmap_unsupported_format",
+             Self::Capacity => "mipmap_capacity",
+             Self::GuestIo => "mipmap_guest_io",
+-            #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++            #[cfg(feature = "backend-metal")]
+             Self::Metal(error) => return Some(crate::observe::Decline::slug(error)),
+         })
+     }
+ 
+     fn fields(&self) -> Vec<(&'static str, String)> {
+         match self {
+-            #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++            #[cfg(feature = "backend-metal")]
+             Self::Metal(error) => crate::observe::Decline::fields(error),
+             _ => Vec::new(),
+         }
+@@ -531,7 +531,7 @@ mod tests {
+         slugs.dedup();
+         assert_eq!(slugs.len(), n, "two mipmap outcomes share a slug");
+ 
+-        #[cfg(all(feature = "backend-metal", target_os = "macos"))]
++        #[cfg(feature = "backend-metal")]
+         {
+             let status = MipmapStatus::Metal(MetalMipmapError::Level0TooShort {
+                 len: 15,

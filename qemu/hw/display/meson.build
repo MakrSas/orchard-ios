@@ -158,16 +158,35 @@ if config_all_devices.has_key('CONFIG_REIMS_VGPU')
   reims_vgpu_abi_header_dir = reims_vgpu_repo_dir / 'crates' / 'reims-vgpu' / 'include'
   cargo = find_program('cargo')
   reims_vgpu_rust_sys_libs = ['-lm', '-ldl', '-lpthread']
-  reims_vgpu_cargo_features = '--no-default-features --features backend-vulkan,host-window'
+  # Vulkan (through MoltenVK) is the desktop-Linux path; iOS has no system
+  # Vulkan and no MoltenVK bundled, but it does have Metal natively, and
+  # backend-metal is reims-vgpu's own Apple-native arm for exactly that case
+  # (crates/reims-vgpu/Cargo.toml — Apple-only, off on Linux by a
+  # compile_error! in src/lib.rs). host-window is left off either way: our
+  # embedder (QemuBridge.swift on iOS, this project's own window elsewhere)
+  # owns presentation, not a Rust-owned winit window.
+  reims_vgpu_ios = host_machine.subsystem() == 'ios'
+  if reims_vgpu_ios
+    reims_vgpu_cargo_features = '--no-default-features --features backend-metal'
+    reims_vgpu_cargo_target_args = ['--target', 'aarch64-apple-ios']
+    reims_vgpu_built = reims_vgpu_repo_dir / 'target' / 'aarch64-apple-ios' / 'release' / 'libreims_vgpu.a'
+  else
+    reims_vgpu_cargo_features = '--no-default-features --features backend-vulkan,host-window'
+    reims_vgpu_cargo_target_args = []
+    reims_vgpu_built = reims_vgpu_repo_dir / 'target' / 'release' / 'libreims_vgpu.a'
+  endif
   reims_vgpu_link_args = reims_vgpu_rust_sys_libs
-  reims_vgpu_built = reims_vgpu_repo_dir / 'target' / 'release' / 'libreims_vgpu.a'
+  if reims_vgpu_ios
+    reims_vgpu_link_args += ['-framework', 'Metal', '-framework', 'QuartzCore']
+  endif
   reims_vgpu_a = custom_target('reims-vgpu-staticlib',
     output: 'libreims_vgpu.a',
     console: true,
     build_always_stale: true,
     command: [find_program('sh'), '-c',
       '"' + cargo.full_path() + '" build --release --manifest-path "' +
-      reims_vgpu_repo_dir + '/Cargo.toml" -p reims-vgpu ' + reims_vgpu_cargo_features +
+      reims_vgpu_repo_dir + '/Cargo.toml" -p reims-vgpu ' +
+      ' '.join(reims_vgpu_cargo_target_args) + ' ' + reims_vgpu_cargo_features +
       ' && ( cmp -s "' + reims_vgpu_built + '" "@OUTPUT@" || cp "' +
       reims_vgpu_built + '" "@OUTPUT@" )'])
   reims_vgpu_header_dep = declare_dependency(
