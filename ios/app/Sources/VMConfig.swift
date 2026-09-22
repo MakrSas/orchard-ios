@@ -458,7 +458,11 @@ struct VMConfig {
         ]
 
         if network {
-            argv += ["-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0"]
+            // romfile= : no option ROM. The card's is an EFI network boot
+            // image, which a macOS guest booting from its own disk never runs,
+            // and the app does not ship QEMU's pc-bios: without this QEMU
+            // stops at `failed to find romfile "efi-virtio.rom"`.
+            argv += ["-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0,romfile="]
         }
 
         if headless || builtInDisplay {
