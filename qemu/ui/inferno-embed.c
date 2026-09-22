@@ -357,6 +357,20 @@ void inferno_input_function_key(uint32_t number, bool pressed)
     bql_unlock();
 }
 
+void inferno_input_key_hid(uint32_t usage, bool pressed)
+{
+    unsigned int lnx;
+
+    if (usage >= qemu_input_map_usb_to_linux_len) { return; }
+    lnx = qemu_input_map_usb_to_linux[usage];
+    /* Zero is "no such key" in the table: a usage with no Linux counterpart. */
+    if (lnx == 0) { return; }
+
+    bql_lock();
+    qemu_input_event_send_key_linux(inferno_dcl.con, lnx, pressed);
+    bql_unlock();
+}
+
 /* ------------------------------------------------------------------ */
 /* Frame counting with no window, for the bench rig                    */
 /* ------------------------------------------------------------------ */

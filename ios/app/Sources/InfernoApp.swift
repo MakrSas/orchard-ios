@@ -1487,6 +1487,9 @@ struct ScreenView: View {
     @ObservedObject var serial: SerialConsole
     @ObservedObject private var settings = Settings.shared
     @Binding var fullScreen: Bool
+    /// Whether the guest has the keyboard: the on-screen one, and a hardware
+    /// one's keys. See GuestKeyboard.swift.
+    @State private var keyboard = false
 
     /// How far the picture keeps from each edge.
     ///
@@ -1531,7 +1534,10 @@ struct ScreenView: View {
     var body: some View {
         GeometryReader { geo in
             let box = drawn(in: geo.size, margins())
-            let radius = settings.roundedScreen ? (box?.width ?? 0) * GuestBezel.radiusOverWidth : 0
+            // The rounded corners are an iPhone 11's screen, drawn round an
+            // iPhone guest's picture. A Mac's display is square-cornered.
+            let radius = settings.roundedScreen && !VMConfig.macGuest
+                ? (box?.width ?? 0) * GuestBezel.radiusOverWidth : 0
             ZStack {
                 Color.black
                 if let frame = picture.image {
@@ -1579,6 +1585,26 @@ struct ScreenView: View {
                         if let box { model.release(at: value.location, in: box) }
                     }
             )
+            #if canImport(UIKit)
+            .background(GuestKeyboard(active: $keyboard).frame(width: 1, height: 1))
+            .overlay(alignment: .bottomLeading) {
+                if VMConfig.macGuest, model.isRunning {
+                    Button {
+                        keyboard.toggle()
+                    } label: {
+                        Image(systemName: keyboard ? "keyboard.chevron.compact.down" : "keyboard")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 48, height: 48)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+                    }
+                    .opacity(0.85)
+                    .padding(.leading, 16)
+                    .padding(.bottom, 16)
+                }
+            }
+            #endif
             // Deliberately small and dim: it sits over the guest's picture, and
             // in full screen it is the only way back.
             .overlay(alignment: .topTrailing) {

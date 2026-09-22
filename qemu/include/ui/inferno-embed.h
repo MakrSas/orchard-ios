@@ -127,6 +127,14 @@ void inferno_input_touch(int32_t x, int32_t y, bool pressed);
 /* Function keys F1..F12, by number. */
 void inferno_input_function_key(uint32_t number, bool pressed);
 
+/*
+ * Any key, by its USB HID usage (page 7) — the code iOS itself reports for a
+ * key, as UIKey.keyCode, so a hardware keyboard needs no table on the app's
+ * side. It reaches the guest through the machine's USB keyboard. Orchard's
+ * addition: Inferno's iPhone guest has no keyboard.
+ */
+void inferno_input_key_hid(uint32_t usage, bool pressed);
+
 #ifdef __cplusplus
 }
 #endif
