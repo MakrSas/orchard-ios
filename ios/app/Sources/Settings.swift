@@ -604,7 +604,7 @@ private struct MachineSettings: View {
                 Picker(L("Гостю"), selection: $settings.memory) {
                     // No 4 GB: past the process's own ceiling, the app is
                     // killed before the guest gets anywhere.
-                    ForEach([("1G", "1 ГБ"), ("1536M", "1.5 ГБ"), ("2G", "2 ГБ"), ("3G", "3 ГБ")], id: \.0) {
+                    ForEach([("1G", "1 ГБ"), ("1536M", "1.5 ГБ"), ("1792M", "1.75 ГБ"), ("2G", "2 ГБ"), ("3G", "3 ГБ")], id: \.0) {
                         Text(L($0.1)).tag($0.0)
                     }
                 }
