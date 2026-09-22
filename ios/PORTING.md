@@ -7,9 +7,10 @@ _Живой журнал этой ветки работы. Обновляетс�
 Orchard — форк QEMU, грузящий немодифицированный arm64 macOS (Ventura) через
 настоящую цепочку загрузки Apple (`AVPBooter → iBootStage1 → iBootStage2 →
 XNU`), эмулируя устройство `apple-vm` (vmapple) — то же, что
-`Virtualization.framework` использует для VM на Apple Silicon. Сейчас
-работает только на Linux/x86-64 через TCG, рабочий стол рендерится через
-`reims-vgpu` (Vulkan, паравиртуальный GPU Apple).
+`Virtualization.framework` использует для VM на Apple Silicon. Апстрим
+Orchard работает на Linux/x86-64 через TCG, рабочий стол рендерится через
+`reims-vgpu` (Vulkan, паравиртуальный GPU Apple). На iOS рендер идёт через
+Metal-бэкенд того же `reims-vgpu`.
 
 Цель этой ветки — портировать сам эмулятор на iOS, чтобы гонять ту же macOS
 VM прямо на iPhone, в бюджете ~2 ГБ ОЗУ.
@@ -18,73 +19,177 @@ VM прямо на iPhone, в бюджете ~2 ГБ ОЗУ.
 независимый проект, эмулирующий настоящий iPhone (SEP, kernelcache,
 DeviceTree, персонализация через рестор-цепочку Apple), уже портированный
 автором на iOS с рабочим JIT. Из Inferno-iOS берутся только универсальные
-куски интерфейса и JIT-обвязка (`JIT.swift`, `QemuBridge.swift`) — под
-капотом будет Orchard/QEMU с vmapple, а не эмуляция iPhone.
+куски интерфейса и JIT-обвязка (`JIT.swift`, `QemuBridge.swift`,
+`ui/inferno-embed.c`, iOS-правки QEMU для JIT и корутин) — под капотом
+Orchard/QEMU с vmapple, а не эмуляция iPhone. Исходники Inferno лежат
+локально в `~/inferno-ios/src/inferno` (форк `MakrSas/Inferno`), приложение —
+`MakrSas/Inferno-iOS`.
 
-## Статус на сейчас
+## Где мы сейчас — 2026-09-22, 22:30
 
-- **[ios/jit-probe](jit-probe)** — минимальное отдельное приложение, только
-  `JIT.swift` + `LogCapture.swift` + `L10n.swift`. Подтвердило: JIT работает
-  через mirrored mapping (split-WX) под StikDebug; `MAP_JIT` сам по себе
-  недоступен (ожидаемо для сайдлоада). Риск: реальное исполнение
-  сгенерированного кода на этом пути виснет намертво под трассировщиком —
-  синтетическую кнопку-тест убрали, реальное доказательство работы JIT — сам
-  QEMU (см. следующий пункт).
-- **[ios/app](app)** — полная копия Inferno-iOS. Переименована в Orchard
-  (`com.makr.orchard`, отдельно от настоящего Inferno). Из интерфейса
-  убраны: экран рестора iPhone (`SetupView` → заглушка «VM не настроена»),
-  пункты меню «Патчи» (менеджер пакетов/каталог/`.deb`/respring), «Кнопки
-  устройства», настройки «Восстановление», «Батарея гостя» и «Строка
-  состояния гостя» (обе — эмуляция iPhone-специфичного железа для гостя,
-  не имеют смысла для macOS). В «Благодарностях» поправлена атрибуция
-  (было «Inferno — форк QEMU», должно быть «Orchard»). Собирается и
-  ставится, реально запускает JIT-диагностику.
-  **Ещё видно iPhone-специфику, но не убрано** (в `Settings.swift`):
-  выбор экрана как у iPhone 11/8/SE, текст про «одно ядро под SEP» и
-  потолок процесса 3 ГиБ — трогать вместе с переписыванием `VMConfig`
-  (пункт 5 ниже), не по отдельности.
-- Готовится macOS Ventura VM через UTM (backend **Virtualize**, не QEMU) —
-  нужна как источник персонализированного диска+NVRAM+ECID вместо
-  скачивания готового tart-образа с ghcr.io.
+**macOS Ventura 13.6 загружается на iPhone до пользовательского пространства,
+но экран чёрный: iOS-драйвер Metal отвергает шейдеры, которые компилирует гость.**
 
-## Архитектура (из каких частей состоит порт)
+Устройство: iPhone15,4 (A16, 6 ГБ), iOS 27.0 beta (24A5390f), JIT через StikDebug.
+
+Что подтверждено на устройстве (логи сборок 22:01–22:18):
+
+- Проходит вся цепочка Apple: AVPBooter → iBootStage1 → iBootStage2 (видно в
+  `guest-console.log`) → XNU → userland. Снимок CPU через QMP показывает
+  `EL0t` с адресами `0x19…` (общий кэш dyld) уже с ~33-й секунды, дальше
+  чередуются `EL1t 0xfffffe…` (ядро) и `EL0t`. Текстового лога ядра нет:
+  при полной политике безопасности `boot-args=-v serial=3` игнорируется.
+- Гость рисует — WindowServer присылает до ~30 кадров/с, они доходят до
+  приложения (`Экран: машина показала N, дошло M`). Все кадры чёрные.
+- Причина — в `reims-vgpu-fail.log`: **ни одной успешной отрисовки**
+  (`draws_ok=0` ×11336), каждая падает с
+  `draw_encode_fail reason=metal_function_library_create_failed mtlb_len=3375…15176`
+  и заменяется очисткой (`draw_fail_clear_fallback` ×7650). То есть
+  `newLibraryWithData:` на iOS не принимает MTLB, скомпилированные гостем.
+  Пробник `tools/ios-metallib-probe` при этом показал, что macOS-metallib,
+  собранные компилятором Apple под macOS 27, на этом же iPhone грузятся — так
+  что дело в чём-то, что отличает именно гостевые блобы (скорее всего — версия
+  ОС/AIR в заголовке или сама платформа при старой версии).
+
+### Следующий шаг
+
+Сборка 22:31 (коммит `1c901d1`, патч `patches/reims-vgpu/0006`) пишет в
+`reims-vgpu-fail.log`:
+
+- `metal_library_refused platform=… os=… mtlb_len=… error=…` — текст ошибки
+  драйвера, по разу на блоб;
+- `metal_library_restamp … result=loaded|refused` — повторная загрузка с
+  платформенным байтом, переписанным на iOS;
+
+и сохраняет каждый отвергнутый блоб в `Documents/reims-vgpu-mtlb/`.
+
+1. Если `restamp … result=loaded` — проверить, появилась ли картинка.
+2. Если `refused` — читать `error=`, а блобы разобрать на Маке:
+   `swiftc -O tools/ios-metallib-probe/Sources/MetallibProbe.swift tools/ios-metallib-probe/cli/main.swift -o /tmp/mtlbprobe`
+   (CLI печатает заголовок и пробует загрузить), сравнить с блобами, которые
+   грузятся. Если придётся править версию ОС в заголовке — делать это там же, в
+   `load_restamped` (`backend/metal/function.rs`).
+3. Запасной путь, если перештамповка не поможет: `metal2vulkan` уже разбирает
+   MTLB (путь MTLB→AIR→SPIR-V для Linux) — можно извлечь AIR и собрать iOS-metallib
+   заново, но упаковщик metallib придётся писать самим (на устройстве нет
+   `metallib`).
+
+## Как собрать и запустить
+
+1. **Библиотека:** `scripts/build-ios.sh` → `qemu/build-ios/libqemu-aarch64-softmmu.dylib`.
+   Нужны `~/inferno-ios/prefix` (glib, pixman, libslirp, libucontext… от
+   Inferno-iOS), Xcode с iPhoneOS SDK (путь к SDK зашит в
+   `scripts/cross-ios-arm64.txt`, сейчас `iPhoneOS27.1.sdk`),
+   `rustup target add aarch64-apple-ios`. Первый раз ~20–30 мин на M1 8 ГБ,
+   дальше инкрементально.
+2. **Приложение:** `ios/app/build.sh` → `ios/Orchard.ipa` (библиотеку ищет
+   сначала в `qemu/build-ios`).
+3. **VM:** выключить её в UTM, затем
+   `scripts/utm-to-orchard.py ~/Library/Containers/com.utmapp.UTM/Data/Documents/macOS.utm --out-dir ~/OrchardVM`.
+   Получается `disk.qcow2` (~15 ГБ), `overlay.qcow2`, `aux.img`,
+   `AVPBooter.patched.bin`, `config.json`. Писать на внутренний APFS, на
+   флешку копировать потом Finder'ом (см. грабли про панику ядра).
+4. Папку скопировать на внешний диск («Образы», exFAT) или в «Файлы» →
+   Orchard → OrchardVM. В приложении: Настройки → «Где лежит VM» → «Выбрать
+   папку…» — диск используется на месте, через security-scoped закладку.
+5. Запускать через StikDebug. Память 1.5–2 ГБ (пользователь ставит 2G;
+   потолок процесса ~3 ГБ), 4 ядра, tb-size 128.
+6. **Логи** — «Файлы» → «На iPhone» → Orchard:
+   - `emulator.log` / `emulator.prev.log` — приложение и stderr QEMU; каждые
+     30 с `CPU0 PC=… EL… · ядер в работе`, каждые 15 с `Экран: …`;
+   - `guest-console.log` — serial гостя;
+   - `reims-vgpu-fail.log` — канал отказов reims-vgpu (главный источник по картинке);
+   - `reims-vgpu-mtlb/` — отвергнутые драйвером шейдеры;
+   - крэши — Настройки → Конфиденциальность → Аналитика → `Orchard-*.ips`.
+
+## Что уже починено (коммиты в `main`, по порядку)
+
+| Коммит | Что |
+|---|---|
+| `39e5fc5` | чекпоинт всего порта (до этого жил незакоммиченным) |
+| `9aba578` | запуск macOS-гостя из приложения: `ui/inferno-embed.c`, `VMConfig` под `-M apple-vm`, выбор папки VM, `build-ios.sh`, `utm-to-orchard.py`; в `reims-vgpu-mmio.c` — `gfx_update → bool`, `vm_*` вместо запрещённого на iOS `mach_vm.h`, без перехвата `qemu_main` в библиотеке |
+| `0b0caf4` | JIT на iOS 26+: буфер «благословляет» отладчик (`brk #0x69`, из Inferno) |
+| `4ab3138` | корутины через `libucontext` (системные `getcontext` на iOS — заглушки → `abort`) |
+| `0155ae2` | `virtio-net-pci,romfile=` (нет `efi-virtio.rom` в бандле) |
+| `ba95e99` | снимок CPU через QMP каждые 30 с |
+| `afe3eef` | строка про экран: кадры показаны / дошли / чёрный ли |
+| `5a968be` | журнал reims-vgpu на iOS в `TMPDIR` (патч 0005), приложение копирует в Documents; исправлен снимок CPU |
+| `1c901d1` | текст ошибки Metal, сохранение блобов, повтор с iOS-штампом (патч 0006) |
+
+**reims-vgpu** — сабмодуль, изменения живут патчами `patches/reims-vgpu/0003…0006`.
+В рабочем дереве сабмодуля они уже применены. На свежем клоне:
+`git submodule update --init reims-vgpu`, затем `git apply` 0003, 0004, 0005, 0006 по порядку.
+
+## Факты и грабли, которые стоили времени
+
+- **UTM на macOS 26+ хранит диск в ASIF** (магия `shdw`), QEMU его не читает.
+  Конвертер подключает образ только на чтение (`diskutil image attach`) и
+  пишет qcow2.
+- **«pflash»-диски vmapple — не флеш**, а блочные бэкенды для загрузочного
+  PV-устройства (BDIF), поэтому qcow2 годится и там.
+- **AVPBooter брать из гостя**, а не с Мака: у macOS 27 место патча уехало
+  (десять кандидатов с тем же прологом), у Ventura — ровно `0x2314`.
+- `AuxiliaryStorage` UTM = формат tart (заголовок `0x4000`), ECID — в
+  `MachineIdentifier` из `config.plist` (bplist). Старый `images/config.json`
+  от tart к этой VM не подходит.
+- **JIT на iOS 26+** под Trusted Execution Monitor: RW→RX изнутри процесса
+  убивает его молча. Только последовательность UTM/Inferno с отладчиком.
+- **На Darwin нет OFD-локов**, поэтому `locking=auto` в QEMU = без блокировок;
+  оверлей нужен, чтобы диск открывался дважды только на чтение и оставался
+  нетронутым.
+- **`/tmp` в песочнице iOS не пишется** — всё, что reims-vgpu туда писал, пропадало.
+- **Заголовок MTLB** (по ~900 образцам): `[0x0B]` платформа — `0x81` macOS,
+  `0x82` iOS, `0x87` симулятор; бит 7 в `[0x05]` повторяет то же; `[0x08]` —
+  версия AIR; `[0x0C]`/`[0x0E]` — major/minor целевой ОС. Вывод из образцов, не документация.
+- **На iPhone нет BC-сжатия текстур** (A16: `supportsBCTextureCompression = false`,
+  на M1 — true): BC привязано к Mac, а не к семейству GPU. В Metal-рельсе
+  reims-vgpu гейта на BC нет — как только гость пришлёт BC-текстуру, Metal
+  уронит процесс `abort()`-ом.
+- **Пустой экран на стадии iBoot ожидаем**: на MMIO-варианте reims-vgpu никто
+  не регистрирует ранний framebuffer (`reims_vgpu_mmio_set_early_fb` не вызывается).
+- `query-cpus-fast` показывает один `thread-id` на все vCPU — на Darwin
+  `qemu_get_thread_id()` возвращает pid, это не однопоточный TCG.
+- `ядер в работе: 1 из 1` в снимке CPU — вероятно, особенность вывода HMP
+  `info cpus`, счётчику пока не верить.
+- **Конвертация ASIF с чтением `/dev/rdisk` и одновременной записью на exFAT
+  уронила macOS 27 beta** (паника `SPTM VIOLATION_ILLEGAL_UNMAP`). Писать на
+  внутренний APFS, потом копировать — без проблем.
+- Флешка `OrchardVM` («OnlyDisk», USB) пишет меньше 1 МБ/с — не использовать.
+  Рабочий диск — «Образы» (exFAT, ~26 МБ/с запись).
+- Хук этой среды не даёт сессии в worktree писать в основной чекаут; работа
+  идёт в worktree на ветке `claude/metal-ios-port-6c8c87`, после каждого
+  коммита `main` в основном чекауте перематывается fast-forward'ом.
+
+## Открытые вопросы, кроме картинки
+
+1. BC-гейт в Metal-рельсе reims-vgpu (см. выше) — иначе будущий `abort()`.
+2. Клавиатура: сейчас есть только касание → USB-планшет. Если у пользователя
+   в VM пароль на вход — включить автологин, пока нет клавиатуры.
+3. Текстовый лог ядра: только через снижение безопасности в самой VM (UTM,
+   recoveryOS) и повторную конвертацию.
+4. Айфонные остатки в приложении (выбор «экрана iPhone 11», `Restore*.swift` и т.д.).
+5. Производительность — пока не мерили.
+6. Лицензии: `ui/inferno-embed.c` пришёл из Inferno-iOS под AGPL-3.0, остальной
+   QEMU — GPL-2.0-or-later. Изменения в `qemu/` по правилам QEMU (`qemu/AGENTS.md`)
+   годятся для этого форка, но не для отправки в апстрим qemu-devel.
+
+## Архитектура
 
 | Часть | Что | Статус |
 |---|---|---|
-| `ios/app` | Копия Inferno-iOS, SPM-стиль без Xcode-проекта | Чистится от iPhone-специфики |
-| `ios/jit-probe` | Минимальный JIT-тест | Работает |
-| `orchard/qemu` | Форк QEMU с vmapple/PAC-патчами | Только Linux x86-64 |
-| `reims-vgpu` | Rust/Vulkan рендер рабочего стола | Нужна замена под iOS |
+| `ios/app` | приложение (оболочка из Inferno-iOS), SPM-стиль без Xcode-проекта | запускает macOS-гостя |
+| `ios/jit-probe` | минимальный JIT-тест | работает |
+| `qemu/` | форк QEMU 11.1 с vmapple/PAC-патчами, библиотекой `shared_lib` | собирается под iOS, грузит macOS |
+| `reims-vgpu` | паравиртуальный GPU Apple, бэкенд Metal | собирается под iOS; шейдеры гостя отвергаются |
+| `tools/ios-metallib-probe` | пробник загрузки metallib на устройстве | работает |
 
-`QemuBridge.swift` (dlopen дилиба + `qemu_init`/`qemu_main_loop` на своём
-треде) и `JIT.swift` — машино-независимые, переиспользуются почти как есть.
-`VMConfig.swift` строит командную строку под iPhone/SEP — придётся
-переписывать под vmapple-аргументы.
+Путь картинки: reims-vgpu (Metal) → `DisplaySurface` консоли QEMU →
+`ui/inferno-embed.c` → `EmbeddedDisplay` в приложении. Ввод: касание →
+`inferno_input_touch` → USB-планшет vmapple.
 
-## Открытые блокеры и следующие шаги
+---
 
-1. Доставить macOS VM в UTM → написать конвертер `.utm`-бандла в
-   `images/disk.raw` + `images/aux.img` + `config.json`, как ждут скрипты
-   Orchard.
-2. Прогнать `extract-avpbooter.py` / `patch-avpbooter.py` на полученном
-   диске (на маке даже проще — APFS уже смонтирован нативно).
-3. **Кросс-компиляция `orchard/qemu` под iOS-arm64.** Тулчейн есть готовый
-   (`~/inferno-ios/cross-ios-arm64.txt`, тот же, что использовал Inferno),
-   но сама компиляция именно vmapple-патчей — не пройденная территория.
-4. **Замена `reims-vgpu`** на программный framebuffer — Vulkan-путь на iOS
-   не встанет. `VMModel` в `InfernoApp.swift` уже имеет абстракцию
-   `GuestDisplay` с `EmbeddedDisplay` (кадры напрямую из библиотеки, без
-   сети) — правильная точка подключения, но саму связку внутри QEMU ещё
-   разбирать по `TECHNICAL.md`.
-5. Переписать `VMConfig.arguments()` под `-M apple-vm,uuid=...` вместо
-   iPhone/SEP аргументов.
-6. Полная зачистка мёртвого iPhone-кода (`Restore*.swift`, `IPSW.swift`,
-   `SEPFirmware.swift`, `Cryptex1.swift`, `IMG4.swift`, `Ticket.swift`,
-   `GuestPackages.swift`, `AppCatalog.swift`, `CatalogView.swift`,
-   `PackagesView.swift`, `Repos.swift`, `GuestInstaller.swift`) — сейчас
-   намеренно оставлены нетронутыми (компилируются, но не вызываются из UI),
-   потому что `VMConfig.arguments()` всё ещё на них ссылается; удалять
-   безопасно только вместе с пунктом 5.
+# История: как шли к первой сборке
 
 ### Кросс-компиляция orchard/qemu под iOS — в процессе
 
@@ -272,3 +377,7 @@ iOS (промпт сохранён, патчи будут в `patches/reims-vgpu
   105 ГБ кажущихся в одном случае). `rsync -S` тоже не спасает: на APFS
   `fpathconf` не поддерживает то, на чём держится sparse-детект rsync.
   Работает `ditto`.
+  **Поправка позже:** при межтомовом копировании `ditto` дыры тоже
+  разворачивал — на флешке `root.bothpatches` занял полные 32 ГиБ вместо
+  8.4, и копирование упёрлось бы в место. Для образов VM проще не полагаться
+  на разреженность вовсе и хранить их в qcow2 (так и делает `utm-to-orchard.py`).
