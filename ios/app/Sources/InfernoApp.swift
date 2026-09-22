@@ -1073,6 +1073,16 @@ final class VMModel: ObservableObject {
             try? fm.removeItem(at: target)
             try? fm.copyItem(at: source, to: target)
         }
+        // And the shader blobs the Metal driver refused, one file each, so
+        // they can be read off the device and taken apart on a desktop.
+        let refused = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("reims-vgpu-mtlb")
+        if let blobs = try? fm.contentsOfDirectory(atPath: refused.path), !blobs.isEmpty {
+            let target = VMConfig.documents.appendingPathComponent("reims-vgpu-mtlb")
+            try? fm.createDirectory(at: target, withIntermediateDirectories: true)
+            for blob in blobs where !fm.fileExists(atPath: target.appendingPathComponent(blob).path) {
+                try? fm.copyItem(at: refused.appendingPathComponent(blob), to: target.appendingPathComponent(blob))
+            }
+        }
     }
 
     // MARK: Input

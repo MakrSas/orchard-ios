@@ -1,0 +1,205 @@
+Subject: [PATCH] metal: say why a shader library was refused; retry it as iOS on iOS
+
+On an iOS host every draw failed with metal_function_library_create_failed
+and the guest's desktop came out black: the device's Metal driver refused the
+MTLB blobs a macOS guest compiles at run time. The failure said only that, and
+mtlb_len; the driver's own error went into an ErrOut nothing printed.
+
+Now:
+  - the refusal carries the blob's platform and OS major (read from the MTLB
+    header), and the driver's error text goes on the failure channel as
+    metal_library_refused, once per blob;
+  - on iOS the refused blob is kept in the process's temporary directory
+    (reims-vgpu-mtlb/<fnv64>-<len>.mtlb) so it can be taken apart off the
+    device;
+  - on iOS only, the blob is retried with its platform stamp rewritten to
+    iOS, and metal_library_restamp records whether that loaded. The same GPU
+    family runs either way; the stamp is what differs. A loaded retry goes into
+    the function cache like any other, so each blob is retried once.
+
+The header layout (0x0B platform: 0x81 macOS, 0x82 iOS, 0x87 simulator; bit 7
+of 0x05 tracking it; 0x0C/0x0E OS major/minor) was read off a survey of the
+metallibs shipped with macOS, iOS and the simulator, not from documentation.
+It describes a blob and is used for the iOS retry; it never decides what the
+guest meant. Other platforms behave as before.
+
+---
+diff --git a/crates/reims-vgpu/src/backend/metal/function.rs b/crates/reims-vgpu/src/backend/metal/function.rs
+index c33360c5..f1196cf8 100644
+--- a/crates/reims-vgpu/src/backend/metal/function.rs
++++ b/crates/reims-vgpu/src/backend/metal/function.rs
+@@ -37,11 +37,30 @@ fn load_only_function_uncached(
+ ) -> Result<Function, Status> {
+     let library = match device.new_library_with_data(mtlb) {
+         Ok(lib) => lib,
+-        Err(e) => {
+-            set_err(err, format!("{label} newLibraryWithData failed: {e}"));
+-            return Err(Status::execute("metal_function_library_create_failed")
+-                .field("mtlb_len", mtlb.len()));
+-        }
++        Err(e) => match load_restamped(device, mtlb, &e) {
++            Some(lib) => lib,
++            None => {
++                let header = MtlbHeader::read(mtlb);
++                // The driver's own words, which a Status cannot carry: once
++                // per blob, since a refused blob never reaches the cache and
++                // every draw that needs it asks again.
++                if keep_refused(mtlb) {
++                    crate::observe::fail(format!(
++                        "metal_library_refused platform={} os={}.{} mtlb_len={} error={}",
++                        header.platform(),
++                        header.os_major(),
++                        header.os_minor(),
++                        mtlb.len(),
++                        compact(&e)
++                    ));
++                }
++                set_err(err, format!("{label} newLibraryWithData failed: {e}"));
++                return Err(Status::execute("metal_function_library_create_failed")
++                    .field("mtlb_len", mtlb.len())
++                    .field("mtlb_platform", header.platform())
++                    .field("mtlb_os_major", header.os_major()));
++            }
++        },
+     };
+     let names = library.function_names();
+     if names.len() != 1 {
+@@ -62,6 +81,138 @@ fn load_only_function_uncached(
+     }
+ }
+ 
++/// The few bytes of an MTLB container header that say what it was built for.
++///
++/// Read off a survey of the metallibs shipped with macOS, iOS and the iOS
++/// simulator (tools/ios-metallib-probe in the Orchard tree): 0x0B separates
++/// the platforms (0x81 macOS, 0x82 iOS, 0x87 iOS Simulator), bit 7 of 0x05
++/// tracks the same split, and 0x0C/0x0E hold the target OS major and minor.
++/// Inferred from samples, not documented; used to describe a blob a driver
++/// refused and, on iOS only, to retry it — never to decide what a guest meant.
++struct MtlbHeader<'a>(&'a [u8]);
++
++const MTLB_MAGIC: &[u8; 4] = b"MTLB";
++/// Only the iOS retry rewrites these two.
++#[cfg(target_os = "ios")]
++const MTLB_FLAGS: usize = 0x05;
++const MTLB_PLATFORM: usize = 0x0B;
++#[cfg(target_os = "ios")]
++const MTLB_PLATFORM_IOS: u8 = 0x82;
++
++impl<'a> MtlbHeader<'a> {
++    fn read(bytes: &'a [u8]) -> Self {
++        Self(bytes)
++    }
++    fn valid(&self) -> bool {
++        self.0.len() >= 0x10 && &self.0[..4] == MTLB_MAGIC
++    }
++    fn platform(&self) -> &'static str {
++        if !self.valid() {
++            return "not_mtlb";
++        }
++        match self.0[MTLB_PLATFORM] {
++            0x81 => "macos",
++            0x82 => "ios",
++            0x87 => "ios_simulator",
++            _ => "unknown",
++        }
++    }
++    fn u16_at(&self, i: usize) -> u16 {
++        if self.valid() {
++            u16::from_le_bytes([self.0[i], self.0[i + 1]])
++        } else {
++            0
++        }
++    }
++    fn os_major(&self) -> u16 {
++        self.u16_at(0x0C)
++    }
++    fn os_minor(&self) -> u16 {
++        self.u16_at(0x0E)
++    }
++}
++
++/// A driver's error on one line, for the failure channel: its `key=value`
++/// fields are split on spaces, so the message keeps none.
++fn compact(e: &impl std::fmt::Display) -> String {
++    let mut s: String = e
++        .to_string()
++        .chars()
++        .map(|c| if c.is_whitespace() { '_' } else { c })
++        .collect();
++    s.truncate(240);
++    s
++}
++
++/// iOS only: a blob the driver refused, retried with its platform stamp
++/// rewritten to iOS.
++///
++/// A macOS guest compiles its shaders for macOS, and an iOS host's Metal
++/// driver is the one asked to load them. The same GPU family runs either
++/// way; what differs is the stamp. Whether the retry was needed, and whether
++/// it worked, goes on the failure channel once per blob — the cache keeps a
++/// loaded function, so a blob is only ever retried once.
++#[cfg(target_os = "ios")]
++fn load_restamped(
++    device: &Device,
++    mtlb: &[u8],
++    first: &impl std::fmt::Display,
++) -> Option<metal::Library> {
++    let header = MtlbHeader::read(mtlb);
++    if !header.valid() || mtlb[MTLB_PLATFORM] == MTLB_PLATFORM_IOS {
++        return None;
++    }
++    let mut stamped = mtlb.to_vec();
++    stamped[MTLB_PLATFORM] = MTLB_PLATFORM_IOS;
++    stamped[MTLB_FLAGS] &= 0x7F;
++    let outcome = device.new_library_with_data(&stamped);
++    crate::observe::fail(format!(
++        "metal_library_restamp platform={} os={}.{} mtlb_len={} result={} first_error={}{}",
++        header.platform(),
++        header.os_major(),
++        header.os_minor(),
++        mtlb.len(),
++        if outcome.is_ok() { "loaded" } else { "refused" },
++        compact(first),
++        outcome
++            .as_ref()
++            .err()
++            .map(|e| format!(" restamped_error={}", compact(e)))
++            .unwrap_or_default(),
++    ));
++    outcome.ok()
++}
++
++#[cfg(not(target_os = "ios"))]
++fn load_restamped(_: &Device, _: &[u8], _: &impl std::fmt::Display) -> Option<metal::Library> {
++    None
++}
++
++/// iOS only: keep one copy of each blob the driver refused, in the process's
++/// temporary directory, so its header and contents can be read off the
++/// device. Bounded by what a guest compiles; each blob is refused once.
++/// Returns whether this blob was refused for the first time.
++#[cfg(target_os = "ios")]
++fn keep_refused(mtlb: &[u8]) -> bool {
++    let hash = mtlb.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
++        (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3)
++    });
++    let dir = std::env::temp_dir().join("reims-vgpu-mtlb");
++    let path = dir.join(format!("{hash:016x}-{}.mtlb", mtlb.len()));
++    if path.exists() {
++        return false;
++    }
++    let _ = std::fs::create_dir_all(&dir);
++    let _ = std::fs::write(path, mtlb);
++    true
++}
++
++/// Everywhere but iOS the refusal is reported every time, as it always was.
++#[cfg(not(target_os = "ios"))]
++fn keep_refused(_: &[u8]) -> bool {
++    true
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
