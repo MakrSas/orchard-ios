@@ -1,0 +1,157 @@
+[package]
+name = "reims-vgpu"
+version = "0.1.0"
+edition = "2021"
+description = "Reims vGPU host path: protocol, device, QEMU C ABI, Metal/Vulkan backends"
+license = "GPL-2.0-or-later"
+
+[lints.rust]
+# objc 0.2's macros retain this legacy feature probe in the destination crate.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+name = "reims_vgpu"
+
+[features]
+# The project supports exactly three arms, one per host GPU API actually
+# available: Metal on Apple, Vulkan through MoltenVK on Apple, and Vulkan on a
+# native Linux ICD. backend-metal is therefore **Apple-only** (macOS and iOS
+# alike) — src/lib.rs rejects it elsewhere with a compile_error!. There is no
+# host-stub Metal arm;
+# a binary that links but cannot draw is worse than a build that fails.
+default = ["backend-metal"]
+backend-metal = []
+# Product Vulkan encode: self-contained ash engine + metal2vulkan
+# (native Vulkan on Linux, MoltenVK on macOS).
+# No vkcompute on any edge (product or dev) — engine is self-contained.
+backend-vulkan = [
+    "dep:ash",
+    "dep:ash-window",
+    "dep:raw-window-handle",
+    "dep:reims-vgpu-vulkan",
+]
+# Host-owned presentation window (kb host-window): a Rust-owned winit window
+# that replaces QEMU's UI. Off by default so the QEMU staticlib link is
+# unchanged until the window is proven. Pulls the windowing stack and nothing
+# else.
+#
+# It names no backend. Which rail fills the window is a run-time answer
+# (`Backend::presents_host_window`), and every rail can: Vulkan drives a
+# swapchain on a `VkSurfaceKHR`, Metal drives a `CAMetalLayer` on the same
+# native view. The surface half each one needs travels with *that rail's*
+# feature — `ash-window` below with `backend-vulkan` — because Cargo cannot
+# express "this dependency when both features are on", and putting the Vulkan
+# half here is what would drag `ash` into a Metal-only build.
+host-window = [
+    "dep:winit",
+    "dep:raw-window-handle",
+    "dep:wayland-client",
+    "dep:wayland-backend",
+    "dep:wayland-protocols",
+    "dep:x11-dl",
+]
+
+[dependencies]
+once_cell = "1"
+parking_lot = "0.12"
+# Wire-format views inferred from macOS Oracles.
+# `no_std`, no allocation, no build script — it adds no runtime dependency.
+reims-vgpu-wire = { path = "../reims-vgpu-wire" }
+# What a decoded wire tag *means*: the refusal-closure ledger that records one
+# outcome per decodable operation. `no_std`, wire-only — it cannot reach back
+# into this crate, which is what keeps the ledger a statement about the
+# protocol rather than a description of this executor.
+reims-vgpu-protocol = { path = "../reims-vgpu-protocol" }
+# Guest address resolution above the wire page-table format: span walks, GPA
+# run coalescing, window region planning. `no_std` + alloc, no host traits.
+reims-vgpu-paging = { path = "../reims-vgpu-paging" }
+# Operator switches: one parser, four results, and the rule that a switch may
+# only ever narrow what this device does. No dependencies of its own.
+reims-vgpu-config = { path = "../reims-vgpu-config" }
+reims-vgpu-memory = { path = "../reims-vgpu-memory" }
+# The backend-neutral protocol vocabulary: layouts, formats, geometry, page
+# arithmetic. A crate so that nothing in it can name a Vulkan handle, a Metal
+# object, or this device's state.
+
+# The always-on sink, the decline vocabulary, and the slug registry. A crate so
+# that the layers below the device can name their own refusal type without
+# depending on the device, and so nothing in it can reach back up.
+reims-vgpu-observe = { path = "../reims-vgpu-observe" }
+ash = { version = "0.38", optional = true }
+# The Vulkan rail: placement and transfer policy from host capabilities.
+reims-vgpu-vulkan = { path = "../reims-vgpu-vulkan", optional = true }
+# The backend-independent semantic model, and with it the checked wire
+# vocabulary the rail's own signatures are written in. Unconditional, because
+# what a guest packet means and what this device owes for it is the same
+# question on every rail: `runtime::ingress` builds the model's packets and no
+# backend feature decides whether it can. The crate names no host API — see its
+# own dependency list — so carrying it on a Metal-only build costs nothing a
+# Vulkan build does not also pay.
+reims-vgpu-core = { path = "../reims-vgpu-core" }
+# Always available for Linux MTLB→AIR→SPIR-V (encode path + probes).
+metal2vulkan = { git = "https://github.com/steelbrain/metal2vulkan.git", rev = "9e0e99a41dc3cb8bb7e288b531f1698a79fd4b1c" }
+winit = { version = "0.30", optional = true }
+ash-window = { version = "0.13", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
+# Keyboard shortcut capture for the host window (`host_window::capture`). The
+# desktop consumes chords before any client sees them; taking them back is a
+# per-window-system request, not something the windowing library exposes.
+#
+# Every one of these is already in the dependency graph as a transitive of
+# `winit` at the same version, so this adds no new code to the build — it only
+# names what this crate calls directly. `wayland-backend`'s `client_system` arm
+# is what `Backend::from_foreign_display` lives in, and it is the arm `winit`
+# itself selects, so both halves share one libwayland connection.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+wayland-client = { version = "0.31", optional = true }
+wayland-backend = { version = "0.3", features = ["client_system"], optional = true }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"], optional = true }
+x11-dl = { version = "2.21", optional = true }
+
+# Metal encode is Apple-only; `backend-metal` is rejected on any other host.
+# Keyed on the vendor rather than on `target_os = "macos"` because iOS is the
+# same Metal, the same `objc` runtime and the same `metal` crate — what these
+# five crates need is an Apple platform, not the desktop one.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+metal = "0.33"
+# `CGSize`, for the one CoreAnimation call that takes one — `CAMetalLayer`'s
+# `drawableSize`, which the host window's Metal presenter sets explicitly rather
+# than inheriting from the layer's bounds. Already in the graph as `metal`'s own
+# dependency at this version, so naming it adds no code to the build; it only
+# says that this crate calls it directly.
+core-graphics-types = { version = "0.2", default-features = false }
+objc = "0.2"
+block = "0.1"
+foreign-types = "0.5"
+libc = "0.2"
+
+[dev-dependencies]
+# The oracle capture's loaders, shared with every suite that reads it.
+reims-vgpu-testkit = { path = "../reims-vgpu-testkit" }
+# Same dependency, with the test-only sink surface turned on. `FailCapture` and
+# the slug-collision panic are compiled separately from the crate that defines
+# them, so `#[cfg(test)]` cannot reach them; Cargo unifies this with the
+# `[dependencies]` entry above when a test target builds and leaves it off for
+# the staticlib QEMU links against.
+reims-vgpu-observe = { path = "../reims-vgpu-observe", features = ["testing"] }
+# Reads `reims-vgpu-wire`'s oracle fixtures — bytes Apple's own serializer
+# produced — so `wire_fixtures_reach_the_decoders` can run them through this
+# crate's decoders. Test-only: nothing here reaches the staticlib QEMU links.
+serde_json = "1"
+
+[build-dependencies]
+# The oracle-capture presence probe, shared with every suite that reads it.
+reims-vgpu-testkit = { path = "../reims-vgpu-testkit" }
+cc = "1"
+
+# Standalone visual smoke test for the host-owned window (needs a display + the
+# windowing stack); built only when the host-window feature is on.
+[[example]]
+name = "host_window_smoke"
+required-features = ["host-window"]
+
+[[example]]
+name = "window_present_off_thread"
+required-features = ["host-window", "backend-vulkan"]

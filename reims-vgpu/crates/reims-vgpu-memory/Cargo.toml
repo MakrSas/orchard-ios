@@ -1,0 +1,30 @@
+[package]
+name = "reims-vgpu-memory"
+version = "0.1.0"
+edition = "2021"
+description = "The guest-RAM bound: imports, checked slices, and the page footprints that outlive them"
+license = "GPL-2.0-or-later"
+
+[lib]
+name = "reims_vgpu_memory"
+
+# What is not here is the claim. No `ash`, no Metal, no QEMU, no device model,
+# no resource table: the one thing this crate does is turn a guest address and a
+# length into a host range that has been bounds-checked against an import that
+# is still alive. A crate that could also see a resource could answer "how big
+# is this" two ways, and the second answer is where a raw pointer and an offset
+# escape.
+[dependencies]
+# `align_up_u64`, the one piece of protocol arithmetic an import alignment
+# needs.
+reims-vgpu-protocol = { path = "../reims-vgpu-protocol" }
+
+# The contiguous-run partition of a page list. A footprint derives its runs once
+# and that arithmetic already lives above the page-table format.
+reims-vgpu-paging = { path = "../reims-vgpu-paging" }
+# `Decline` and `Emit`, so a bounds failure names itself on the always-on
+# channel without depending on the device that logs it.
+reims-vgpu-observe = { path = "../reims-vgpu-observe" }
+
+[dev-dependencies]
+reims-vgpu-observe = { path = "../reims-vgpu-observe", features = ["testing"] }

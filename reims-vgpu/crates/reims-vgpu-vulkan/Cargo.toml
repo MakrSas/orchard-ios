@@ -1,0 +1,30 @@
+[package]
+name = "reims-vgpu-vulkan"
+version = "0.1.0"
+edition = "2021"
+description = "The Vulkan rail: the only layer that turns host capabilities into placement and transfer policy"
+license = "GPL-2.0-or-later"
+
+[lib]
+name = "reims_vgpu_vulkan"
+
+# What is not here is the claim. No QEMU, no device model, no guest-RAM
+# ownership, no decode: this crate reads what a physical device offers and
+# decides how work is placed and moved on it. A dependency on the device crate
+# would let a placement decision read device state, and a placement that can see
+# device state is one that can make the same guest stream mean two things.
+[dependencies]
+ash = "0.38"
+# The semantic model this rail executes. It supplies the lifetimes and the
+# transaction shapes; it can name nothing in here.
+reims-vgpu-core = { path = "../reims-vgpu-core" }
+# A refusal names itself on the always-on channel.
+reims-vgpu-observe = { path = "../reims-vgpu-observe" }
+# Operator switches, which may narrow what this rail does and never widen it.
+reims-vgpu-config = { path = "../reims-vgpu-config" }
+
+[dev-dependencies]
+reims-vgpu-observe = { path = "../reims-vgpu-observe", features = ["testing"] }
+# The shared allocation-counting instrument the structural-zero suites measure
+# with. Nothing in the library depends on it.
+reims-vgpu-testkit = { path = "../reims-vgpu-testkit" }

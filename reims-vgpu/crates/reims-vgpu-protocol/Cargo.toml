@@ -1,0 +1,28 @@
+[package]
+name = "reims-vgpu-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "The first layer allowed to assign meaning to Apple paravirtualized GPU wire tags"
+license = "GPL-2.0-or-later"
+
+[lib]
+name = "reims_vgpu_protocol"
+
+# Wire only. This crate reads the byte-accurate views and the coverage manifest
+# and says what each decodable operation *means*; it must not reach the device,
+# a backend, or the host OS. `#![no_std]` keeps that structural.
+[dependencies]
+reims-vgpu-wire = { path = "../reims-vgpu-wire" }
+# The guest page-table walk whose statuses this crate names on the fail channel.
+reims-vgpu-paging = { path = "../reims-vgpu-paging" }
+# `Decline` and `Refusal` only — the vocabulary a check refuses in, without the
+# sink that logs it. `default-features = false` is what keeps this crate
+# `no_std`, and it is the dependency the layering exists for.
+reims-vgpu-observe = { path = "../reims-vgpu-observe", default-features = false }
+
+[dev-dependencies]
+# The tests assert what a refusal *renders* as, which is the sink's half. Under
+# resolver 2 a dev-dependency's features are not unified into a build that does
+# not compile tests, so the library stays `no_std`; the feature matrix checks
+# that separately with `--lib`, because `--all-targets` turns this on.
+reims-vgpu-observe = { path = "../reims-vgpu-observe", features = ["std", "testing"] }

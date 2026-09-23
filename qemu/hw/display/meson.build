@@ -166,6 +166,9 @@ if config_all_devices.has_key('CONFIG_REIMS_VGPU')
   # embedder (QemuBridge.swift on iOS, this project's own window elsewhere)
   # owns presentation, not a Rust-owned winit window.
   reims_vgpu_ios = host_machine.subsystem() == 'ios'
+  # A cross build must hand cargo the same target and C compiler as meson,
+  # or the host-architecture archive in target/release is linked instead.
+  reims_vgpu_cargo_env = ''
   if reims_vgpu_ios
     reims_vgpu_cargo_features = '--no-default-features --features backend-metal'
     reims_vgpu_cargo_target_args = ['--target', 'aarch64-apple-ios']
@@ -174,6 +177,15 @@ if config_all_devices.has_key('CONFIG_REIMS_VGPU')
     reims_vgpu_cargo_features = '--no-default-features --features backend-vulkan,host-window'
     reims_vgpu_cargo_target_args = []
     reims_vgpu_built = reims_vgpu_repo_dir / 'target' / 'release' / 'libreims_vgpu.a'
+    if meson.is_cross_build()
+      reims_vgpu_rust_triple = host_machine.cpu_family() + '-unknown-linux-gnu'
+      reims_vgpu_env_triple = reims_vgpu_rust_triple.underscorify()
+      reims_vgpu_cc = meson.get_compiler('c').cmd_array()[0]
+      reims_vgpu_cargo_env = 'CC_' + reims_vgpu_env_triple + '="' + reims_vgpu_cc + '" ' + \
+        'CARGO_TARGET_' + reims_vgpu_env_triple.to_upper() + '_LINKER="' + reims_vgpu_cc + '" '
+      reims_vgpu_cargo_target_args = ['--target', reims_vgpu_rust_triple]
+      reims_vgpu_built = reims_vgpu_repo_dir / 'target' / reims_vgpu_rust_triple / 'release' / 'libreims_vgpu.a'
+    endif
   endif
   reims_vgpu_link_args = reims_vgpu_rust_sys_libs
   if reims_vgpu_ios
@@ -184,7 +196,7 @@ if config_all_devices.has_key('CONFIG_REIMS_VGPU')
     console: true,
     build_always_stale: true,
     command: [find_program('sh'), '-c',
-      '"' + cargo.full_path() + '" build --release --manifest-path "' +
+      reims_vgpu_cargo_env + '"' + cargo.full_path() + '" build --release --manifest-path "' +
       reims_vgpu_repo_dir + '/Cargo.toml" -p reims-vgpu ' +
       ' '.join(reims_vgpu_cargo_target_args) + ' ' + reims_vgpu_cargo_features +
       ' && ( cmp -s "' + reims_vgpu_built + '" "@OUTPUT@" || cp "' +

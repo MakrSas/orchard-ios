@@ -1,0 +1,15 @@
+[package]
+name = "reims-vgpu-testkit"
+version = "0.1.0"
+edition = "2021"
+description = "Shared behavioral fixtures: the oracle capture's presence probe, its loaders, and the helpers three suites read it with"
+license = "GPL-2.0-or-later"
+
+[lib]
+name = "reims_vgpu_testkit"
+
+# Nothing about the device is in scope. This crate reads files the capture
+# harness wrote and answers questions about them; a dependency on any crate it
+# supports would make one of them unable to use it.
+[dependencies]
+serde_json = "1"

@@ -1,0 +1,386 @@
+From a586fc66e37c1707da5fd27257964bbb8c222a48 Mon Sep 17 00:00:00 2001
+From: Anees Iqbal <anees@usesimple.ai>
+Date: Thu, 2 Jul 2026 10:00:48 +0200
+Subject: [PATCH 1/5] vmapple: enable arm macOS guest boot on a macOS 26 host
+ (RFC v7 patches 1-6)
+
+Applies the QEMU-devel RFC v7 series "vmapple: make it work on the latest
+macOS release" (Mohamed Mediouni), patches 1-6, rebased onto this base:
+
+  1. apple-gfx: use the macOS 15.4+ PGMemoryMapDescriptor interface
+     (+ argument buffers / process isolation)
+  2. hw/vmapple/aes: convert MAX_LEN to a #define
+  3. vmapple: declare it AArch64-compatible (visible to -M vmapple)
+  4. build the VMapple machine by default (CONFIG_VMAPPLE=y)
+  5. vmapple: add the arm-gicv2m MSI controller
+  6. vmapple, gicv2m: macOS compat quirk (V2M_MSI_TYPER bit 31)
+
+Patch 7 (private ISA / Tahoe) is deliberately excluded: it requires SIP
+disabled + AMFI bypass, which this project does not do. This boots an arm
+macOS Monterey guest under -M vmapple with HVF on a macOS 26 host.
+---
+ configs/devices/aarch64-softmmu/default.mak |  2 +-
+ hw/display/apple-gfx-mmio.m                 | 59 ++++++++++++++++-----
+ hw/display/apple-gfx.h                      | 16 ++++++
+ hw/display/apple-gfx.m                      | 41 +++++++++++++-
+ hw/intc/arm_gicv2m.c                        |  5 ++
+ hw/vmapple/aes.c                            |  3 +-
+ hw/vmapple/vmapple.c                        | 27 ++++++++++
+ 7 files changed, 136 insertions(+), 17 deletions(-)
+
+diff --git a/configs/devices/aarch64-softmmu/default.mak b/configs/devices/aarch64-softmmu/default.mak
+index ad8028cf..a7c78222 100644
+--- a/configs/devices/aarch64-softmmu/default.mak
++++ b/configs/devices/aarch64-softmmu/default.mak
+@@ -9,4 +9,4 @@ include ../arm-softmmu/default.mak
+ # CONFIG_XLNX_VERSAL=n
+ # CONFIG_SBSA_REF=n
+ # CONFIG_NPCM8XX=n
+-CONFIG_VMAPPLE=n
++CONFIG_VMAPPLE=y
+diff --git a/hw/display/apple-gfx-mmio.m b/hw/display/apple-gfx-mmio.m
+index 58beaadd..cc1f8cfc 100644
+--- a/hw/display/apple-gfx-mmio.m
++++ b/hw/display/apple-gfx-mmio.m
+@@ -19,6 +19,7 @@
+ #include "hw/core/irq.h"
+ #include "apple-gfx.h"
+ #include "trace.h"
++#include "system/address-spaces.h"
+ 
+ #import <ParavirtualizedGraphics/ParavirtualizedGraphics.h>
+ 
+@@ -36,12 +37,19 @@ typedef bool(^IOSFCMapMemory)(uint64_t phys, uint64_t len, bool ro, void **va,
+ 
+ @interface PGDeviceDescriptor (IOSurfaceMapper)
+ @property (readwrite, nonatomic) bool usingIOSurfaceMapper;
++@property (readwrite, nonatomic) bool enableArgumentBuffers;
++@property (readwrite, nonatomic) bool enableProcessIsolation;
++@property (readwrite, nonatomic) bool enableProtectedContent;
++
++@property (readwrite, nonatomic, copy, nullable) PGMemoryMapDescriptor* memoryMapDescriptor;
+ @end
+ 
+ @interface PGIOSurfaceHostDeviceDescriptor : NSObject
+ -(PGIOSurfaceHostDeviceDescriptor *)init;
+ @property (readwrite, nonatomic, copy, nullable) IOSFCMapMemory mapMemory;
+ @property (readwrite, nonatomic, copy, nullable) IOSFCUnmapMemory unmapMemory;
++@property (readwrite, nonatomic, copy, nullable) PGMemoryMapDescriptor* memoryMapDescriptor;
++@property (readwrite, nonatomic) unsigned long long mmioLength;
+ @property (readwrite, nonatomic, copy, nullable) IOSFCRaiseInterrupt raiseInterrupt;
+ @end
+ 
+@@ -183,19 +191,32 @@ static bool apple_gfx_mmio_unmap_surface_memory(void *ptr)
+         [PGIOSurfaceHostDeviceDescriptor new];
+     PGIOSurfaceHostDevice *iosfc_host_dev;
+ 
+-    iosfc_desc.mapMemory =
+-        ^bool(uint64_t phys, uint64_t len, bool ro, void **va, void *e, void *f) {
+-            *va = apple_gfx_mmio_map_surface_memory(phys, len, ro);
+-
+-            trace_apple_gfx_iosfc_map_memory(phys, len, ro, va, e, f, *va);
+-
+-            return *va != NULL;
+-        };
+-
+-    iosfc_desc.unmapMemory =
+-        ^bool(void *va, void *b, void *c, void *d, void *e, void *f) {
+-            return apple_gfx_mmio_unmap_surface_memory(va);
+-        };
++    /*
++     * The legacy memory management API is no longer present
++     * for the IOSurface mapper as of macOS 15.4.
++     */
++    if (@available(macOS 15.4, *)) {
++        PGMemoryMapDescriptor *memory_map_descriptor = [PGMemoryMapDescriptor new];
++        FlatView* fv = address_space_to_flatview(&address_space_memory);
++        flatview_for_each_range(fv, apple_gfx_register_memory_cb, memory_map_descriptor);
++        /* the device model defines this as a single-page MMIO region, hence 16KB */
++        iosfc_desc.mmioLength = 0x10000;
++        iosfc_desc.memoryMapDescriptor = memory_map_descriptor;
++    } else {
++        iosfc_desc.mapMemory =
++            ^bool(uint64_t phys, uint64_t len, bool ro, void **va, void *e, void *f) {
++                *va = apple_gfx_mmio_map_surface_memory(phys, len, ro);
++
++                trace_apple_gfx_iosfc_map_memory(phys, len, ro, va, e, f, *va);
++
++                return *va != NULL;
++            };
++
++        iosfc_desc.unmapMemory =
++            ^bool(void *va, void *b, void *c, void *d, void *e, void *f) {
++                return apple_gfx_mmio_unmap_surface_memory(va);
++            };
++    }
+ 
+     iosfc_desc.raiseInterrupt = ^bool(uint32_t vector) {
+         trace_apple_gfx_iosfc_raise_irq(vector);
+@@ -223,13 +244,23 @@ static void apple_gfx_mmio_realize(DeviceState *dev, Error **errp)
+         };
+ 
+         desc.usingIOSurfaceMapper = true;
+-        s->pgiosfc = apple_gfx_prepare_iosurface_host_device(s);
++        desc.enableArgumentBuffers = true;
++        /* 
++         * Process isolation needs PGMemoryMapDescriptor instead of
++         * the legacy memory management interface present in releases
++         * older than macOS 15.4.
++         */
++        if (@available(macOS 15.4, *)) {
++            desc.enableProcessIsolation = true;
++        }
+ 
+         if (!apple_gfx_common_realize(&s->common, dev, desc, errp)) {
+             [s->pgiosfc release];
+             s->pgiosfc = nil;
+         }
+ 
++        s->pgiosfc = apple_gfx_prepare_iosurface_host_device(s);
++
+         [desc release];
+         desc = nil;
+     }
+diff --git a/hw/display/apple-gfx.h b/hw/display/apple-gfx.h
+index 3197bd85..384aee0c 100644
+--- a/hw/display/apple-gfx.h
++++ b/hw/display/apple-gfx.h
+@@ -12,6 +12,7 @@
+ #include "system/memory.h"
+ #include "hw/core/qdev-properties.h"
+ #include "ui/surface.h"
++#include "objc/NSObject.h"
+ 
+ #define TYPE_APPLE_GFX_MMIO         "apple-gfx-mmio"
+ #define TYPE_APPLE_GFX_PCI          "apple-gfx-pci"
+@@ -23,6 +24,17 @@
+ @protocol MTLTexture;
+ @protocol MTLCommandQueue;
+ 
++typedef struct PGGuestPhysicalRange_s
++{
++    uint64_t physicalAddress;
++    uint64_t physicalLength;
++    void *hostAddress;
++} PGGuestPhysicalRange_t;
++
++@interface PGMemoryMapDescriptor : NSObject
++-(void)addRange:(PGGuestPhysicalRange_t) range;
++@end
++
+ typedef QTAILQ_HEAD(, PGTask_s) PGTaskList;
+ 
+ typedef struct AppleGFXDisplayMode {
+@@ -68,6 +80,10 @@ void *apple_gfx_host_ptr_for_gpa_range(uint64_t guest_physical,
+                                        uint64_t length, bool read_only,
+                                        MemoryRegion **mapping_in_region);
+ 
++bool apple_gfx_register_memory_cb(Int128 start, Int128 len,
++                                  const MemoryRegion *mr,
++                                  hwaddr offset_in_region, void *opaque);
++
+ extern const PropertyInfo qdev_prop_apple_gfx_display_mode;
+ 
+ #endif
+diff --git a/hw/display/apple-gfx.m b/hw/display/apple-gfx.m
+index be0061b9..d2dafcb3 100644
+--- a/hw/display/apple-gfx.m
++++ b/hw/display/apple-gfx.m
+@@ -21,6 +21,7 @@
+ #include "system/address-spaces.h"
+ #include "system/dma.h"
+ #include "migration/blocker.h"
++#include "system/memory.h"
+ #include "ui/console.h"
+ #include "apple-gfx.h"
+ #include "trace.h"
+@@ -596,6 +597,35 @@ void apple_gfx_common_init(Object *obj, AppleGFXState *s, const char* obj_name)
+     /* TODO: PVG framework supports serialising device state: integrate it! */
+ }
+ 
++@interface PGDeviceDescriptor (IOSurfaceMapper)
++@property (readwrite, nonatomic, copy, nullable) PGMemoryMapDescriptor* memoryMapDescriptor;
++@end
++
++bool apple_gfx_register_memory_cb(Int128 start, Int128 len,
++                                  const MemoryRegion *mr,
++                                  hwaddr offset_in_region, void *opaque) {
++    PGGuestPhysicalRange_t range;
++    PGMemoryMapDescriptor *memory_map_descriptor = opaque;
++    if (memory_access_is_direct(mr, true, MEMTXATTRS_UNSPECIFIED)) {
++        range.physicalAddress = start;
++        range.physicalLength = len;
++        range.hostAddress = memory_region_get_ram_ptr(mr);
++        [memory_map_descriptor addRange:range];
++    }
++    return false;
++}
++
++static void apple_gfx_register_memory(AppleGFXState *s,
++                                                     PGDeviceDescriptor *desc)
++{
++    PGMemoryMapDescriptor* memoryMapDescriptor = [PGMemoryMapDescriptor new];
++
++    FlatView* fv = address_space_to_flatview(&address_space_memory);
++    flatview_for_each_range(fv, apple_gfx_register_memory_cb, memoryMapDescriptor);
++
++    desc.memoryMapDescriptor = memoryMapDescriptor;
++}
++
+ static void apple_gfx_register_task_mapping_handlers(AppleGFXState *s,
+                                                      PGDeviceDescriptor *desc)
+ {
+@@ -763,7 +793,16 @@ bool apple_gfx_common_realize(AppleGFXState *s, DeviceState *dev,
+ 
+     desc.device = s->mtl;
+ 
+-    apple_gfx_register_task_mapping_handlers(s, desc);
++    /* 
++     * The legacy memory management interface doesn't allow for
++     * vGPU sandboxing. As such, always use the new interface
++     * on macOS 15.4 onwards. 
++     */
++    if (@available(macOS 15.4, *)) {
++        apple_gfx_register_memory(s, desc);
++    } else {
++        apple_gfx_register_task_mapping_handlers(s, desc);
++    }
+ 
+     s->cursor_show = true;
+ 
+diff --git a/hw/intc/arm_gicv2m.c b/hw/intc/arm_gicv2m.c
+index b343e17c..ead1d9d0 100644
+--- a/hw/intc/arm_gicv2m.c
++++ b/hw/intc/arm_gicv2m.c
+@@ -57,6 +57,7 @@ struct ARMGICv2mState {
+ 
+     uint32_t base_spi;
+     uint32_t num_spi;
++    uint32_t macos_compat;
+ };
+ 
+ static void gicv2m_set_irq(void *opaque, int irq)
+@@ -81,6 +82,9 @@ static uint64_t gicv2m_read(void *opaque, hwaddr offset,
+     case V2M_MSI_TYPER:
+         val = (s->base_spi + 32) << 16;
+         val |= s->num_spi;
++        if (s->macos_compat) {
++            val |= BIT(31);
++        }
+         return val;
+     case V2M_MSI_IIDR:
+         /* We don't have any valid implementor so we leave that field as zero
+@@ -173,6 +177,7 @@ static void gicv2m_init(Object *obj)
+ static const Property gicv2m_properties[] = {
+     DEFINE_PROP_UINT32("base-spi", ARMGICv2mState, base_spi, 0),
+     DEFINE_PROP_UINT32("num-spi", ARMGICv2mState, num_spi, 64),
++    DEFINE_PROP_UINT32("macos-compat", ARMGICv2mState, macos_compat, 0),
+ };
+ 
+ static void gicv2m_class_init(ObjectClass *klass, const void *data)
+diff --git a/hw/vmapple/aes.c b/hw/vmapple/aes.c
+index 553e688a..9d062d5a 100644
+--- a/hw/vmapple/aes.c
++++ b/hw/vmapple/aes.c
+@@ -253,7 +253,7 @@ static bool cmd_iv(AESState *s)
+ 
+ static void dump_data(const char *desc, const void *p, size_t len)
+ {
+-    static const size_t MAX_LEN = 0x1000;
++#define MAX_LEN  0x1000
+     char hex[MAX_LEN * 2 + 1] = "";
+ 
+     if (len > MAX_LEN) {
+@@ -262,6 +262,7 @@ static void dump_data(const char *desc, const void *p, size_t len)
+ 
+     qemu_hexdump_to_buffer(hex, sizeof(hex), p, len);
+     trace_aes_dump_data(desc, hex);
++#undef MAX_LEN
+ }
+ 
+ static bool cmd_data(AESState *s)
+diff --git a/hw/vmapple/vmapple.c b/hw/vmapple/vmapple.c
+index 607181f5..90e3f7ef 100644
+--- a/hw/vmapple/vmapple.c
++++ b/hw/vmapple/vmapple.c
+@@ -32,6 +32,7 @@
+ #include "hw/core/sysbus.h"
+ #include "hw/usb/usb.h"
+ #include "hw/arm/boot.h"
++#include "hw/arm/machines-qom.h"
+ #include "hw/char/pl011.h"
+ #include "hw/intc/arm_gic.h"
+ #include "hw/intc/arm_gicv3_common.h"
+@@ -82,6 +83,7 @@ enum {
+     VMAPPLE_MEM,
+     VMAPPLE_GIC_DIST,
+     VMAPPLE_GIC_REDIST,
++    VMAPPLE_GICV2M,
+     VMAPPLE_UART,
+     VMAPPLE_RTC,
+     VMAPPLE_PCIE,
+@@ -103,6 +105,7 @@ static const MemMapEntry memmap[] = {
+ 
+     [VMAPPLE_GIC_DIST] =           { 0x10000000, 0x00010000 },
+     [VMAPPLE_GIC_REDIST] =         { 0x10010000, 0x00400000 },
++    [VMAPPLE_GICV2M] =             { 0x1FFF0000, 0x00010000 },
+ 
+     [VMAPPLE_UART] =               { 0x20010000, 0x00010000 },
+     [VMAPPLE_RTC] =                { 0x20050000, 0x00001000 },
+@@ -128,6 +131,7 @@ static const int irqmap[] = {
+     [VMAPPLE_APV_GFX] = 0x11,
+     [VMAPPLE_AES_1] = 0x12,
+     [VMAPPLE_PCIE] = 0x20,
++    [VMAPPLE_GICV2M] = 0x80
+ };
+ 
+ #define GPEX_NUM_IRQS 16
+@@ -285,6 +289,27 @@ static void create_gic(VMAppleMachineState *vms, MemoryRegion *mem)
+     }
+ }
+ 
++#define NUM_GICV2M_SPIS       128
++
++static void create_gicv2m(VMAppleMachineState *vms)
++{
++    int i;
++    int irq = vms->irqmap[VMAPPLE_GICV2M];
++    DeviceState *dev;
++
++    dev = qdev_new("arm-gicv2m");
++    qdev_prop_set_uint32(dev, "base-spi", irq);
++    qdev_prop_set_uint32(dev, "num-spi", NUM_GICV2M_SPIS);
++    qdev_prop_set_uint32(dev, "macos-compat", 1);
++    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
++    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, vms->memmap[VMAPPLE_GICV2M].base);
++
++    for (i = 0; i < NUM_GICV2M_SPIS; i++) {
++        sysbus_connect_irq(SYS_BUS_DEVICE(dev), i,
++                           qdev_get_gpio_in(vms->gic, irq + i));
++    }
++}
++
+ static void create_uart(const VMAppleMachineState *vms, int uart,
+                         MemoryRegion *mem, Chardev *chr)
+ {
+@@ -495,6 +520,7 @@ static void mach_vmapple_init(MachineState *machine)
+                                 machine->ram);
+ 
+     create_gic(vms, sysmem);
++    create_gicv2m(vms);
+     create_bdif(vms, sysmem);
+     create_pvpanic(vms, sysmem);
+     create_aes(vms, sysmem);
+@@ -609,6 +635,7 @@ static const TypeInfo vmapple_machine_info = {
+     .instance_size = sizeof(VMAppleMachineState),
+     .class_init    = vmapple_machine_class_init,
+     .instance_init = vmapple_instance_init,
++    .interfaces    = aarch64_machine_interfaces
+ };
+ 
+ static void machvmapple_machine_init(void)
+
+base-commit: b83371668192a705b878e909c5ae9c1233cbd5fb
+-- 
+2.54.0
+

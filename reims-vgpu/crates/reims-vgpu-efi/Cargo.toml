@@ -1,0 +1,36 @@
+# Standalone UEFI package (not a QEMU display). Builds the PCI option ROM payload
+# for reims-vgpu-pci — same device as BAR0/BAR1, loaded by OVMF as expansion ROM.
+#
+# Sibling of crates/reims-vgpu (host staticlib), not a workspace member: this
+# package targets x86_64-unknown-uefi and must not share the host package graph.
+[workspace]
+
+[package]
+name = "reims-vgpu-efi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "UEFI GOP option ROM for reims-vgpu-pci (BAR1)"
+
+[dependencies]
+uefi = { version = "0.33", default-features = false, features = [
+  "alloc",
+  "global_allocator",
+  "logger",
+  "panic_handler",
+] }
+log = { version = "0.4", default-features = false }
+
+# Host unit tests exercise `paint` (real Blt paths). UEFI PE is the binary.
+[lib]
+name = "reims_vgpu_efi"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reims-vgpu-efi"
+path = "src/main.rs"
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "s"

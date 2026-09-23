@@ -1,0 +1,300 @@
+From bfb15a0cd0817411dd54e4f6edfe0bbd5d669801 Mon Sep 17 00:00:00 2001
+From: Anees Iqbal <hello@aneesiqbal.ai>
+Date: Thu, 2 Jul 2026 12:37:57 +0200
+Subject: [PATCH 3/5] hvf: emulate ISV=0 data aborts (LDP/STP, SIMD&FP, indexed
+ LDR/STR)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+macOS 13+ guest kernels access MMIO with instructions the CPU reports with
+ISV=0 (no instruction syndrome) during early boot — load/store pair, SIMD&FP
+single-register, and pre/post-indexed GPR loads/stores. macOS 12 did not, so
+the vmapple bring-up never hit this. QEMU's hvf arm data-abort handler had a
+bare assert(isv), so any such access aborted QEMU (observed:
+insn=0xb8080d09 'str w9,[x8,#128]!' at ipa=0x10020080).
+
+Decode the faulting instruction from guest memory and perform the access at
+the already-translated fault IPA, covering exactly the A64 classes that report
+ISV=0 and can target MMIO. Refuse SP-based writeback and anything unrecognized
+(abort with pc/insn/va/ipa context) rather than silently mis-emulating.
+---
+ target/arm/hvf/hvf.c | 255 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 250 insertions(+), 5 deletions(-)
+
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+index 8cdb4c34..868de42e 100644
+--- a/target/arm/hvf/hvf.c
++++ b/target/arm/hvf/hvf.c
+@@ -2334,6 +2334,238 @@ static void hvf_sync_vtimer(CPUState *cpu)
+     }
+ }
+ 
++/*
++ * Emulate a load/store that took a data abort with ISV=0, i.e. with no
++ * instruction syndrome: the CPU only describes single general-purpose
++ * loads/stores in the ISS, so LDP/STP and SIMD&FP accesses to MMIO arrive
++ * undecoded. macOS 13+ guest kernels perform such accesses against device
++ * memory during early boot (the macOS 12 kernel does not), so vmapple needs
++ * this to run newer guests.
++ *
++ * Decodes the faulting instruction from guest memory and performs the access
++ * at the already-translated fault IPA. Covers exactly the A64 classes that
++ * report ISV=0 and can plausibly target MMIO:
++ *   - load/store pair, GPR and SIMD&FP (LDP/STP/LDNP/STNP/LDPSW), all
++ *     indexing modes
++ *   - load/store single SIMD&FP register (LDR/STR/LDUR/STUR B/H/S/D/Q),
++ *     immediate/register-offset/pre/post-index forms
++ * Anything else (exclusives, atomics, SP-based writeback, ...) returns false
++ * so the caller can fail loudly with full context.
++ *
++ * On success the emulated instruction is complete: registers and PC are
++ * updated in env (state was pulled via cpu_synchronize_state, so the handler
++ * tail's flush_cpu_state pushes everything back to HVF).
++ */
++static bool hvf_emulate_isv0_mmio(CPUState *cpu, hwaddr ipa, uint32_t *insn_out)
++{
++    CPUARMState *env = cpu_env(cpu);
++    AddressSpace *as = cpu_get_address_space(cpu, ARMASIdx_NS);
++    uint32_t insn = 0;
++
++    cpu_synchronize_state(cpu);
++
++    if (cpu_memory_rw_debug(cpu, env->pc, &insn, sizeof(insn), false)) {
++        return false;
++    }
++    *insn_out = insn;
++
++    if ((insn & 0x38000000) == 0x28000000) {
++        /* Load/store pair (incl. no-allocate): C4.1.66 op0=x101. */
++        uint32_t opc = extract32(insn, 30, 2);
++        bool is_vector = extract32(insn, 26, 1);
++        uint32_t mode = extract32(insn, 23, 2);   /* 0=STNP/LDNP 1=post 2=offset 3=pre */
++        bool is_load = extract32(insn, 22, 1);
++        int64_t imm7 = sextract32(insn, 15, 7);
++        uint32_t rt2 = extract32(insn, 10, 5);
++        uint32_t rn = extract32(insn, 5, 5);
++        uint32_t rt = extract32(insn, 0, 5);
++        bool wback = (mode == 1) || (mode == 3);
++        bool sext = false;
++        int esize;
++
++        if (is_vector) {
++            if (opc == 3) {
++                return false;               /* unallocated */
++            }
++            esize = 4 << opc;               /* S/D/Q */
++        } else if (opc == 0) {
++            esize = 4;
++        } else if (opc == 1 && is_load) {
++            esize = 4;
++            sext = true;                    /* LDPSW */
++        } else if (opc == 2) {
++            esize = 8;
++        } else {
++            return false;                   /* unallocated / STGP */
++        }
++        if (wback && rn == 31) {
++            return false;                   /* SP-based MMIO writeback: refuse */
++        }
++
++        for (int i = 0; i < 2; i++) {
++            uint32_t reg = i ? rt2 : rt;
++            hwaddr addr = ipa + (hwaddr)i * esize;
++            uint8_t buf[16] = { 0 };
++
++            if (is_load) {
++                address_space_read(as, addr, MEMTXATTRS_UNSPECIFIED, buf, esize);
++                if (is_vector) {
++                    env->vfp.zregs[reg].d[0] = ldq_le_p(buf);
++                    env->vfp.zregs[reg].d[1] = esize == 16 ? ldq_le_p(buf + 8) : 0;
++                } else if (reg != 31) {
++                    uint64_t v = esize == 4 ? ldl_le_p(buf) : ldq_le_p(buf);
++                    env->xregs[reg] = sext ? sextract64(v, 0, 32) : v;
++                }
++            } else {
++                if (is_vector) {
++                    stq_le_p(buf, env->vfp.zregs[reg].d[0]);
++                    if (esize == 16) {
++                        stq_le_p(buf + 8, env->vfp.zregs[reg].d[1]);
++                    }
++                } else if (reg != 31) {
++                    if (esize == 4) {
++                        stl_le_p(buf, (uint32_t)env->xregs[reg]);
++                    } else {
++                        stq_le_p(buf, env->xregs[reg]);
++                    }
++                }
++                address_space_write(as, addr, MEMTXATTRS_UNSPECIFIED, buf, esize);
++            }
++        }
++        if (wback) {
++            env->xregs[rn] += imm7 * esize;
++        }
++        env->pc += 4;
++        return true;
++    }
++
++    if (extract32(insn, 24, 6) == 0x38) {
++        /*
++         * Load/store single GPR, imm9/register-offset forms: bits[29:24]=
++         * 111000. The pre/post-indexed (writeback) forms report ISV=0
++         * because the syndrome cannot describe the base update — macOS 13+
++         * uses e.g. "str w9, [x8, #128]!" on MMIO.
++         */
++        uint32_t size = extract32(insn, 30, 2);
++        uint32_t opc = extract32(insn, 22, 2);
++        uint32_t rn = extract32(insn, 5, 5);
++        uint32_t rt = extract32(insn, 0, 5);
++        bool wback = false;
++        int esize = 1 << size;
++        uint8_t buf[8] = { 0 };
++
++        if (extract32(insn, 21, 1)) {
++            if (extract32(insn, 10, 2) != 2) {
++                return false;           /* atomics etc., not register-offset */
++            }
++        } else {
++            switch (extract32(insn, 10, 2)) {
++            case 0:                     /* LDUR/STUR: no writeback */
++            case 2:                     /* LDTR/STTR: treat as plain access */
++                break;
++            case 1:                     /* post-index */
++            case 3:                     /* pre-index */
++                wback = true;
++                break;
++            }
++        }
++        if (size == 3 && opc == 2) {
++            return false;               /* PRFUM: prefetch never aborts */
++        }
++        if (wback && rn == 31) {
++            return false;               /* SP-based MMIO writeback: refuse */
++        }
++
++        if (opc == 0) {                 /* store */
++            if (rt != 31) {
++                stq_le_p(buf, env->xregs[rt]);
++            }
++            address_space_write(as, ipa, MEMTXATTRS_UNSPECIFIED, buf, esize);
++        } else {                        /* load: 01 zext, 10 sext→X, 11 sext→W */
++            uint64_t v;
++
++            address_space_read(as, ipa, MEMTXATTRS_UNSPECIFIED, buf, esize);
++            v = ldq_le_p(buf) & MAKE_64BIT_MASK(0, esize * 8);
++            if (opc == 2) {
++                v = sextract64(v, 0, esize * 8);
++            } else if (opc == 3) {
++                v = (uint32_t)sextract64(v, 0, esize * 8);
++            }
++            if (rt != 31) {
++                env->xregs[rt] = v;
++            }
++        }
++        if (wback) {
++            env->xregs[rn] += sextract32(insn, 12, 9);
++        }
++        env->pc += 4;
++        return true;
++    }
++
++    if (extract32(insn, 24, 6) == 0x3d || extract32(insn, 24, 6) == 0x3c) {
++        /* Load/store single SIMD&FP register: bits[29:24]=1111 0V. */
++        uint32_t size = extract32(insn, 30, 2);
++        uint32_t opc = extract32(insn, 22, 2);
++        bool unsigned_imm = extract32(insn, 24, 2) == 1;
++        bool is_load = opc & 1;
++        uint32_t rn = extract32(insn, 5, 5);
++        uint32_t rt = extract32(insn, 0, 5);
++        uint32_t scale = size;
++        bool wback = false;
++        int esize;
++        uint8_t buf[16] = { 0 };
++
++        if (opc & 2) {
++            if (size != 0) {
++                return false;               /* only Q extends the size range */
++            }
++            scale = 4;
++        }
++        esize = 1 << scale;
++
++        if (!unsigned_imm) {
++            if (extract32(insn, 21, 1)) {
++                if (extract32(insn, 10, 2) != 2) {
++                    return false;           /* not a register-offset form */
++                }
++            } else {
++                switch (extract32(insn, 10, 2)) {
++                case 0:                     /* LDUR/STUR: no writeback */
++                    break;
++                case 1:                     /* post-index */
++                case 3:                     /* pre-index */
++                    wback = true;
++                    break;
++                default:
++                    return false;
++                }
++            }
++        }
++        if (wback && rn == 31) {
++            return false;                   /* SP-based MMIO writeback: refuse */
++        }
++
++        if (is_load) {
++            address_space_read(as, ipa, MEMTXATTRS_UNSPECIFIED, buf, esize);
++            env->vfp.zregs[rt].d[0] = ldq_le_p(buf);
++            env->vfp.zregs[rt].d[1] = esize == 16 ? ldq_le_p(buf + 8) : 0;
++        } else {
++            stq_le_p(buf, env->vfp.zregs[rt].d[0]);
++            if (esize == 16) {
++                stq_le_p(buf + 8, env->vfp.zregs[rt].d[1]);
++            }
++            address_space_write(as, ipa, MEMTXATTRS_UNSPECIFIED, buf, esize);
++        }
++        if (wback) {
++            env->xregs[rn] += sextract32(insn, 12, 9);
++        }
++        env->pc += 4;
++        return true;
++    }
++
++    return false;
++}
++
+ static int hvf_handle_exception(CPUState *cpu, hv_vcpu_exit_exception_t *excp)
+ {
+     CPUARMState *env = cpu_env(cpu);
+@@ -2440,11 +2672,24 @@ static int hvf_handle_exception(CPUState *cpu, hv_vcpu_exit_exception_t *excp)
+          */
+         assert(!s1ptw);
+ 
+-        /*
+-         * TODO: ISV will be 0 for SIMD or SVE accesses.
+-         * Inject the exception into the guest.
+-         */
+-        assert(isv);
++        if (!isv) {
++            /*
++             * No instruction syndrome (LDP/STP, SIMD&FP, ...): decode and
++             * emulate the faulting instruction. macOS 13+ guests do such
++             * accesses against MMIO in early boot.
++             */
++            uint32_t insn = 0;
++
++            if (!hvf_emulate_isv0_mmio(cpu, ipa, &insn)) {
++                error_report("hvf: unhandled ISV=0 data abort: pc=0x%" PRIx64
++                             " insn=0x%08x va=0x%llx ipa=0x%llx wnr=%d",
++                             env->pc, insn, excp->virtual_address,
++                             excp->physical_address, iswrite);
++                abort();
++            }
++            /* Emulation advanced env->pc itself; flushed at handler tail. */
++            break;
++        }
+ 
+         /*
+          * Emulate MMIO.
+-- 
+2.54.0
+

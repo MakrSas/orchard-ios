@@ -20,24 +20,12 @@ export REIMS_VGPU_DIR="${REIMS_VGPU_DIR:-$ROOT/reims-vgpu}"
 # Disabling the user site directory is enough and affects nothing else.
 export PYTHONNOUSERSITE=1
 
-# The GPU is a submodule, pinned to the upstream commit this tree was tested
-# against, and kept pristine: our changes to it live in patches/reims-vgpu/ so
-# the boundary between steelbrain's work and ours stays visible. Apply them
-# here, skipping any that is already in.
-if [ -d "$ROOT/.git" ] && [ ! -f "$REIMS_VGPU_DIR/Cargo.toml" ]; then
-  git -C "$ROOT" submodule update --init --recursive
-fi
-# `-e`, not `-d`: in a submodule `.git` is a file holding a gitdir pointer, and
-# testing for a directory silently skips every patch.
-if git -C "$REIMS_VGPU_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  for patch in "$ROOT"/patches/reims-vgpu/*.patch; do
-    [ -e "$patch" ] || continue
-    if git -C "$REIMS_VGPU_DIR" apply --reverse --check "$patch" 2>/dev/null; then
-      continue                              # already applied
-    fi
-    echo "applying $(basename "$patch")"
-    git -C "$REIMS_VGPU_DIR" apply "$patch"
-  done
+# The GPU is vendored in-tree at reims-vgpu/ (upstream:
+# https://github.com/steelbrain/reims-vgpu, with our changes baked in),
+# so there is nothing to fetch or patch here. Fail early if it is missing.
+if [ ! -f "$REIMS_VGPU_DIR/Cargo.toml" ]; then
+  echo "error: REIMS_VGPU_DIR has no Cargo.toml: $REIMS_VGPU_DIR" >&2
+  exit 1
 fi
 
 cd "$ROOT/qemu"

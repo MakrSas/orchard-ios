@@ -1,0 +1,4 @@
+# rustfmt config for the root Cargo workspace.
+# Run `cargo fmt --all` from the repo root, or `cargo fmt` inside a single crate.
+edition = "2021"
+max_width = 100

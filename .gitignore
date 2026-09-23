@@ -28,3 +28,6 @@ ios/**/.build/
 
 # Python bytecode from the scripts
 __pycache__/
+
+# Local-only field wrapper: kept in the working tree, never committed.
+arm-wrapper/

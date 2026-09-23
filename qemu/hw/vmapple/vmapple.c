@@ -61,6 +61,7 @@
 #include "qobject/qlist.h"
 #include "standard-headers/linux/input.h"
 #include "system/hvf.h"
+#include "system/kvm.h"
 #include "system/reset.h"
 #include "system/runstate.h"
 #include "system/system.h"
@@ -89,6 +90,9 @@ struct VMAppleMachineState {
      */
     bool fiq_timer;
 
+    /* gfx=off: stub GFX/IOSurface MMIO instead of the GPU (headless). */
+    bool no_gfx;
+
 
     /* Stub MMIO regions for headless bringup when apple-gfx-mmio is unavailable */
     MemoryRegion dummy_gfx;
@@ -100,6 +104,18 @@ OBJECT_DECLARE_SIMPLE_TYPE(VMAppleMachineState, VMAPPLE_MACHINE)
 
 /* Orchard's own Apple VM machine with a custom CPU (see registration below). */
 #define TYPE_APPLE_VM_MACHINE  MACHINE_TYPE_NAME("apple-vm")
+
+/*
+ * Out-of-tree KVM capability carried by orchard's host kernel patch
+ * (Linux 6.17, KVM_CAP_ARM_APPLE_VM). It makes KVM honour the two Apple-VM contracts the TCG
+ * model implements in QEMU: the architected timers reach the vCPU as FIQ
+ * (fiq_timer below), and a core started by the kernel through PSCI CPU_ON
+ * inherits its caller's pointer-authentication keys (ORCHARD_PAC_INHERIT).
+ * The value sits far from upstream's range so it cannot alias a real cap.
+ */
+#ifndef KVM_CAP_ARM_APPLE_VM
+#define KVM_CAP_ARM_APPLE_VM 20306
+#endif
 
 /* Number of external interrupt lines to configure the GIC with */
 #define NUM_IRQS 256
@@ -271,7 +287,9 @@ static void create_gfx(VMAppleMachineState *vms, MemoryRegion *mem)
     const char *gfx_type = NULL;
     SysBusDevice *gfx;
 
-    if (object_class_by_name("reims-vgpu-mmio")) {
+    if (vms->no_gfx) {
+        gfx_type = NULL;
+    } else if (object_class_by_name("reims-vgpu-mmio")) {
         gfx_type = "reims-vgpu-mmio";
     } else if (object_class_by_name("apple-gfx-mmio")) {
         gfx_type = "apple-gfx-mmio";
@@ -695,6 +713,24 @@ static void mach_vmapple_init(MachineState *machine)
             object_property_set_int(cpu, "cntfrq", 24000000, &error_fatal);
         }
 
+        /*
+         * Nothing wires a PMU overflow interrupt on this machine, and KVM
+         * refuses to run a vCPU whose in-kernel PMU has no interrupt.
+         */
+        if (kvm_enabled() && object_property_find(cpu, "pmu")) {
+            object_property_set_bool(cpu, "pmu", false, &error_fatal);
+        }
+
+        /*
+         * XNU's ApplePSCI accepts PSCI up to 1.1 (what TCG reports) and
+         * refuses KVM's newer default ("unsupported PSCI version 1.3"),
+         * after which no secondary core is ever started.
+         */
+        if (kvm_enabled() && object_property_find(cpu, "kvm-psci-version")) {
+            object_property_set_str(cpu, "kvm-psci-version", "1.1",
+                                    &error_fatal);
+        }
+
         /* Secondary CPUs start in PSCI powered-down state */
         if (n > 0) {
             object_property_set_bool(cpu, "start-powered-off", true,
@@ -708,6 +744,25 @@ static void mach_vmapple_init(MachineState *machine)
 
     memory_region_add_subregion(sysmem, vms->memmap[VMAPPLE_MEM].base,
                                 machine->ram);
+
+    /*
+     * Under KVM the timers and PSCI live in the host kernel, so the fiq-or
+     * gate and the PAC_INHERIT hooks in target/arm never run. The host must
+     * provide the same contract, or the guest hangs on its first tick.
+     */
+#ifdef CONFIG_KVM
+    if (kvm_enabled() && vms->fiq_timer) {
+        if (!kvm_vm_check_extension(kvm_state, KVM_CAP_ARM_APPLE_VM)) {
+            error_report("apple-vm under KVM needs a host kernel with "
+                         "KVM_CAP_ARM_APPLE_VM (Apple-VM KVM support)");
+            exit(1);
+        }
+        if (kvm_vm_enable_cap(kvm_state, KVM_CAP_ARM_APPLE_VM, 0) < 0) {
+            error_report("enabling KVM_CAP_ARM_APPLE_VM failed");
+            exit(1);
+        }
+    }
+#endif
 
     create_gic(vms, sysmem);
     create_gicv2m(vms);
@@ -791,6 +846,16 @@ static GlobalProperty vmapple_compat_defaults[] = {
     { TYPE_XHCI_PCI, "conditional-intr-mapping", "on" },
 };
 
+static bool vmapple_get_gfx(Object *obj, Error **errp)
+{
+    return !VMAPPLE_MACHINE(obj)->no_gfx;
+}
+
+static void vmapple_set_gfx(Object *obj, bool value, Error **errp)
+{
+    VMAPPLE_MACHINE(obj)->no_gfx = !value;
+}
+
 static void vmapple_machine_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -821,6 +886,9 @@ static void vmapple_instance_init(Object *obj)
     object_property_add_uint64_ptr(obj, "uuid", &vms->uuid,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "uuid", "Machine UUID (SDOM)");
+    object_property_add_bool(obj, "gfx", vmapple_get_gfx, vmapple_set_gfx);
+    object_property_set_description(obj, "gfx",
+                                    "Attach the GPU (off: stub MMIO, headless)");
 }
 
 static const TypeInfo vmapple_machine_info = {

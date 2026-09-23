@@ -1,0 +1,70 @@
+
+build/
+# build output
+.cache/
+# caches / scratch
+dist/
+*.dmg
+.DS_Store
+# editor / OS cruft
+*.fd
+/target/
+/host/target/
+.idea/
+# (Negations must re-include the parent dir before re-including files within it.)
+*.o
+OVMF_VARS*.fd
+*.part
+*.png
+!/assets/
+!/assets/readme/
+!/assets/readme/reims-vgpu-macos-arm64-desktop.png
+!/assets/readme/reims-vgpu-macos-x86-desktop.png
+*.ppm
+__pycache__/
+*.qcow2
+*.spv
+*.spv.h
+*.swp
+/vm/*
+!/vm/boot-arm64.sh
+!/vm/boot-x86.sh
+!/vm/guest-authorize.sh
+!/vm/rail-debug-posture.sh
+!/vm/rail-sweep.sh
+!/vm/drive-desktop.sh
+vm/debug/
+vm/logs/
+# OVMF firmware blobs (CODE/VARS .fd) — large binary runtime, never commit
+/vm/ovmf/
+!/vm/README.md
+!/vm/.version
+.vscode/
+Vulkan-Headers/
+.claude/worktrees/
+.claude/settings.local.json
+/.agents/
+
+# Private research notes and handoff material.
+/kb/
+/journal/
+/m2v-handoff/
+# Packaged metal2vulkan defects: a README plus the Apple AIR that reproduces each.
+# Apple bytes, so local only — hand a directory over by copying it. See AGENTS.md.
+/bugs/
+
+# vendor/qemu is a git submodule (steelbrain/qemu-reims-vgpu, branch host-reims-vgpu-vmapple).
+# Its own build/ output is ignored by QEMU's own .gitignore.
+
+# In-workspace vmapple guest bundle (provisioned by scripts/vmapple-provision;
+# disk/aux images + instance-specific vm.json + per-boot run scratch). Large/private.
+/vm/guest/
+/vm/ipsw/
+
+# Guest crash reports (.ips) — Apple diagnostic artifacts, keep local, never commit
+.agents/crashes/
+
+# LLVM coverage artifacts (scripts/runtime-dead writes under /tmp; these are
+# what a stray instrumented `cargo test` drops in the tree).
+*.profraw
+*.profdata
