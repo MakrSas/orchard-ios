@@ -52,6 +52,14 @@ struct Credit: Identifiable, Hashable {
                name: "Alexander Graf",
                did: L("Автор машины vmapple в QEMU — той, что повторяет виртуальную машину Apple из Virtualization.framework. На ней построена apple-vm, где работает гость."),
                x: nil, site: nil),
+        Credit(github: "VisualEhrmanntraut",
+               name: "Visual Ehrmanntraut",
+               did: L("Автор эмулятора Apple Silicon на QEMU, с которого всё началось. Из него пришли поддержка PAC, без которой ядро macOS не грузится, и оболочка, из которой выросло это приложение."),
+               x: "HeWhomCodes", site: "https://chefkiss.dev"),
+        Credit(github: "ChefKissInc",
+               name: "ChefKiss",
+               did: L("Команда этого эмулятора: их форк QEMU и руководства — то, с чего начиналось это приложение."),
+               x: nil, site: "https://chefkiss.dev"),
         Credit(github: "",
                name: "QEMU",
                did: L("Orchard — форк QEMU, а QEMU написан очень многими людьми. Отдельного человека тут назвать нельзя, но без их работы не было бы ни эмулятора, ни приложения."),
@@ -109,7 +117,7 @@ struct CreditsView: View {
                         .buttonStyle(.plain)
                 }
             } footer: {
-                Text(L("Приложение неофициальное и никак не связано с Apple. Аватарки берутся с GitHub — у X открытого способа их получить нет."))
+                Text(L("Приложение неофициальное и никак не связано ни с Apple, ни с ChefKiss. Аватарки берутся с GitHub — у X открытого способа их получить нет."))
             }
         }
         .navigationTitle(L("Благодарности"))

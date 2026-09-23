@@ -1435,10 +1435,12 @@ struct ControlMenu: View {
                 Button(L("Во весь экран"), systemImage: "arrow.up.left.and.arrow.down.right") {
                     fullScreen = true
                 }
-                Button(L("Поднять сеть в госте"), systemImage: "network") {
-                    model.fixNetwork()
+                if !VMConfig.macGuest {
+                    Button(L("Поднять сеть в госте"), systemImage: "network") {
+                        model.fixNetwork()
+                    }
+                    .disabled(!model.isRunning)
                 }
-                .disabled(!model.isRunning)
                 Button(role: .destructive) {
                     confirmQuit = true
                 } label: {
@@ -1447,15 +1449,19 @@ struct ControlMenu: View {
                 .disabled(!model.isRunning)
             }
 
-            Section(L("Файлы")) {
-                Button(L("Отправить файл в гостя…"), systemImage: "square.and.arrow.up") {
-                    pickFile = true
+            // Files travel through the iPhone guest's shell on the console; a
+            // macOS guest has none there.
+            if !VMConfig.macGuest {
+                Section(L("Файлы")) {
+                    Button(L("Отправить файл в гостя…"), systemImage: "square.and.arrow.up") {
+                        pickFile = true
+                    }
+                    Button(L("Забрать файл из гостя…"), systemImage: "square.and.arrow.down") {
+                        askPath = true
+                    }
                 }
-                Button(L("Забрать файл из гостя…"), systemImage: "square.and.arrow.down") {
-                    askPath = true
-                }
+                .disabled(!model.isRunning || model.transfer?.isRunning == true)
             }
-            .disabled(!model.isRunning || model.transfer?.isRunning == true)
 
         } label: {
             // The one control on screen, so it is given some presence: a glass
@@ -1945,7 +1951,7 @@ struct TerminalView: View {
                 .safeAreaInset(edge: .bottom) { Color.clear.frame(height: acceptsInput ? 60 : 72) }
             }
             .onAppear {
-                screen.rebuild(from: serial.text, hideKernel: settings.hideKernel,
+                screen.rebuild(from: serial.text, hideKernel: settings.hideKernel && !VMConfig.macGuest,
                                sequence: serial.sequence)
                 pin += 1
                 openShellIfNeeded()
@@ -1959,7 +1965,7 @@ struct TerminalView: View {
             }
             .onChange(of: shell.state) { _ in pin += 1 }
             .onChange(of: settings.hideKernel) { on in
-                screen.rebuild(from: serial.text, hideKernel: on,
+                screen.rebuild(from: serial.text, hideKernel: on && !VMConfig.macGuest,
                                sequence: serial.sequence)
                 pin += 1
             }

@@ -249,11 +249,11 @@ final class Settings: ObservableObject {
     /// behaviour in both cases, so an unknown build behaves as it always did.
     var emulatorEnvironment: [String: String] {
         var env: [String: String] = [:]
-        if vcpuPriority { env["ORCHARD_VCPU_QOS"] = "interactive" }
+        if vcpuPriority, !VMConfig.macGuest { env["ORCHARD_VCPU_QOS"] = "interactive" }
         // The audio hardware is described to the guest only when this is set: the drivers behind those
         // device tree nodes cost boot time and idle CPU, so a machine started without sound carries none
         // of them.
-        if guestAudio { env["ORCHARD_AUDIO"] = "1" }
+        if guestAudio, !VMConfig.macGuest { env["ORCHARD_AUDIO"] = "1" }
         if let lines = Int(guestResolution.dropFirst("screen".count)),
            guestResolution.hasPrefix("screen") {
             let size = Settings.screenShaped(lines: lines)
@@ -272,7 +272,7 @@ final class Settings: ObservableObject {
         c.tbSize = tbSize
         c.virtualization = virtualization && HVF.probe == .available
         c.network = network
-        c.usbExport = usbExport ? usbExportAddress : nil
+        c.usbExport = usbExport && !VMConfig.macGuest ? usbExportAddress : nil
         c.headless = headless
         c.builtInDisplay = builtInDisplay
         c.audio = guestAudio
@@ -355,7 +355,7 @@ struct SettingsView: View {
 
                 Section {
                     NavigationLink { ScreenSettings() } label: {
-                        Label(L("Экран"), systemImage: "iphone.gen3")
+                        Label(L("Экран"), systemImage: VMConfig.macGuest ? "display" : "iphone.gen3")
                     }
                     NavigationLink { TerminalSettings() } label: {
                         Label(L("Терминал"), systemImage: "terminal")
@@ -435,17 +435,21 @@ struct MacSettingsView: View {
         NavigationSplitView {
             List(selection: $page) {
                 Section {
-                    row(.screen, L("Экран"), "iphone.gen3")
+                    row(.screen, L("Экран"), VMConfig.macGuest ? "display" : "iphone.gen3")
                     row(.terminal, L("Терминал"), "terminal")
                     row(.network, L("Сеть"), "network")
-                    row(.battery, L("Батарея гостя"), "battery.75percent")
-                    row(.statusBar, L("Строка состояния гостя"), "antenna.radiowaves.left.and.right")
+                    if !VMConfig.macGuest {
+                        row(.battery, L("Батарея гостя"), "battery.75percent")
+                        row(.statusBar, L("Строка состояния гостя"), "antenna.radiowaves.left.and.right")
+                    }
                 }
                 Section {
                     row(.general, L("Основные"), "gearshape")
                     row(.machine, L("Машина"), "cpu")
                     row(.translator, L("Транслятор"), "arrow.triangle.2.circlepath")
-                    row(.restore, L("Восстановление"), "arrow.clockwise.circle")
+                    if !VMConfig.macGuest {
+                        row(.restore, L("Восстановление"), "arrow.clockwise.circle")
+                    }
                     row(.diagnostics, L("Диагностика"), "stethoscope")
                 }
                 Section {
@@ -521,18 +525,20 @@ private struct ScreenSettings: View {
                 }
             }
 
-            Section {
-                Picker(L("Панель"), selection: $settings.panel) {
-                    ForEach(GuestPanel.allCases, id: \.rawValue) { panel in
-                        Text(panel.title).tag(panel.rawValue)
+            if !VMConfig.macGuest {
+                Section {
+                    Picker(L("Панель"), selection: $settings.panel) {
+                        ForEach(GuestPanel.allCases, id: \.rawValue) { panel in
+                            Text(panel.title).tag(panel.rawValue)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    LabeledContent(L("Размер"),
+                                   value: (GuestPanel(rawValue: settings.panel) ?? .iphone11).detail)
+                        .font(.footnote)
+                } footer: {
+                    Text(L("Экран гостя рисуется без графического ускорителя — каждый кадр собирают эмулируемые ядра, и платят они за каждый пиксель. Панель поменьше — меньше работы: у iPhone 8 пикселей на треть меньше, чем у iPhone 11, у SE — вдвое. Чёткость при этом не страдает: масштаб везде двукратный, ресурсы iOS берёт те же, интерфейс просто становится интерфейсом телефона поменьше. Применяется при запуске машины."))
                 }
-                .pickerStyle(.segmented)
-                LabeledContent(L("Размер"),
-                               value: (GuestPanel(rawValue: settings.panel) ?? .iphone11).detail)
-                    .font(.footnote)
-            } footer: {
-                Text(L("Экран гостя рисуется без графического ускорителя — каждый кадр собирают эмулируемые ядра, и платят они за каждый пиксель. Панель поменьше — меньше работы: у iPhone 8 пикселей на треть меньше, чем у iPhone 11, у SE — вдвое. Чёткость при этом не страдает: масштаб везде двукратный, ресурсы iOS берёт те же, интерфейс просто становится интерфейсом телефона поменьше. Применяется при запуске машины."))
             }
 
             Section {
@@ -550,16 +556,18 @@ private struct ScreenSettings: View {
                          : L("Картинка идёт через VNC-сервер эмулятора по локальной петле кодировкой Raw: весь кадр сравнивается, кодируется, пересылается и разбирается заново. Медленнее, зато этот путь давно обкатан."))
                 }
 
-                Section {
-                    Toggle(L("Скруглять углы"), isOn: $settings.roundedScreen)
-                } footer: {
-                    Text(L("Как у настоящего iPhone 11: 41,5 pt при ширине экрана 414 pt — десятая часть ширины. Доля, а не число в пикселях, поэтому углы остаются верными при любом масштабе. Выключите, чтобы видеть кадр целиком, до последней точки."))
-                }
+                if !VMConfig.macGuest {
+                    Section {
+                        Toggle(L("Скруглять углы"), isOn: $settings.roundedScreen)
+                    } footer: {
+                        Text(L("Как у настоящего iPhone 11: 41,5 pt при ширине экрана 414 pt — десятая часть ширины. Доля, а не число в пикселях, поэтому углы остаются верными при любом масштабе. Выключите, чтобы видеть кадр целиком, до последней точки."))
+                    }
 
-                Section {
-                    Toggle(L("Ядрам гостя — быстрые ядра телефона"), isOn: $settings.vcpuPriority)
-                } footer: {
-                    Text(L("Потоки эмулируемых ядер просят у iOS высший класс обслуживания. Без этого они получают обычный, и телефон вправе увести их на энергоэффективные ядра. Применяется при запуске машины."))
+                    Section {
+                        Toggle(L("Ядрам гостя — быстрые ядра телефона"), isOn: $settings.vcpuPriority)
+                    } footer: {
+                        Text(L("Потоки эмулируемых ядер просят у iOS высший класс обслуживания. Без этого они получают обычный, и телефон вправе увести их на энергоэффективные ядра. Применяется при запуске машины."))
+                    }
                 }
 
                 Section {
@@ -585,10 +593,12 @@ private struct TerminalSettings: View {
 
     var body: some View {
         Form {
-            Section {
-                Toggle(L("Только шелл"), isOn: $settings.hideKernel)
-            } footer: {
-                Text(L("У гостя одна консоль на всех: ядро сыплет в неё сообщения драйверов, bash пишет туда же. Сообщения ядра узнаются по виду и вырезаются — в том числе воткнутые в середину чужой строки. Это распознавание по признакам, а не настоящее разделение: что-то незнакомое может проскочить."))
+            if !VMConfig.macGuest {
+                Section {
+                    Toggle(L("Только шелл"), isOn: $settings.hideKernel)
+                } footer: {
+                    Text(L("У гостя одна консоль на всех: ядро сыплет в неё сообщения драйверов, bash пишет туда же. Сообщения ядра узнаются по виду и вырезаются — в том числе воткнутые в середину чужой строки. Это распознавание по признакам, а не настоящее разделение: что-то незнакомое может проскочить."))
+                }
             }
 
             Section {
@@ -607,38 +617,46 @@ private struct NetworkSettings: View {
 
     var body: some View {
         Form {
-            Section {
-                Toggle(L("Интернет через USB"), isOn: $settings.network)
-                    .disabled(settings.usbExport)
-            } footer: {
-                Text(L("Эмулятор сам работает USB-хостом: переводит устройство в режим CDC-NCM и выпускает трафик наружу через slirp. Отдельная виртуалка не нужна."))
-            }
-
-            if settings.network, !settings.usbExport {
+            if VMConfig.macGuest {
                 Section {
-                    Toggle(L("Поднимать интерфейс в госте"), isOn: $settings.netAutoFix)
+                    Toggle(L("Интернет"), isOn: $settings.network)
                 } footer: {
-                    Text(L("iOS не всегда включает свой конец связи: интерфейс появляется и тут же гасится. Если через минуту адрес так и не получен, приложение само выполнит в консоли гостя «ipconfig set en0 DHCP». Нужен бутстрап с шеллом на консоли."))
+                    Text(L("Сетевая карта virtio-net, за ней NAT внутри эмулятора (slirp): гость получает адрес по DHCP и выходит в сеть через сеть телефона. Снаружи к гостю не подключиться. Применяется при запуске машины."))
                 }
-            }
+            } else {
+                Section {
+                    Toggle(L("Интернет через USB"), isOn: $settings.network)
+                        .disabled(settings.usbExport)
+                } footer: {
+                    Text(L("Эмулятор сам работает USB-хостом: переводит устройство в режим CDC-NCM и выпускает трафик наружу через slirp. Отдельная виртуалка не нужна."))
+                }
 
-            Section {
-                Toggle(L("Отдавать USB гостя наружу"), isOn: $settings.usbExport)
-                if settings.usbExport {
-                    LabeledContent(L("Адрес")) {
-                        TextField("0.0.0.0:8030", text: $settings.usbExportAddress)
-                            .font(.footnote.monospaced())
-                            .multilineTextAlignment(.trailing)
-                            .autocorrectionDisabled()
-                            .noAutocapitalization()
+                if settings.network, !settings.usbExport {
+                    Section {
+                        Toggle(L("Поднимать интерфейс в госте"), isOn: $settings.netAutoFix)
+                    } footer: {
+                        Text(L("iOS не всегда включает свой конец связи: интерфейс появляется и тут же гасится. Если через минуту адрес так и не получен, приложение само выполнит в консоли гостя «ipconfig set en0 DHCP». Нужен бутстрап с шеллом на консоли."))
                     }
                 }
-            } header: {
-                Text(L("Порт USB"))
-            } footer: {
-                Text(settings.usbExport
-                     ? L("Пока это включено, интернета в госте и восстановления не будет: порт у гостя один, и хост у него один. На маке нужен клиент VirtualHere — он найдёт машину сам (Bonjour, имя «Orchard») или примет адрес руками. Только TCP; гость должен догрузиться до подъёма своего USB.")
-                     : L("Порт гостя можно отдать другой машине по протоколу VirtualHere: мак с клиентом VirtualHere увидит настоящий айфон на своём USB — Finder, usbmuxd, idevice-инструменты. Взамен уходит всё, ради чего порт нужен здесь: интернет в госте и восстановление."))
+
+                Section {
+                    Toggle(L("Отдавать USB гостя наружу"), isOn: $settings.usbExport)
+                    if settings.usbExport {
+                        LabeledContent(L("Адрес")) {
+                            TextField("0.0.0.0:8030", text: $settings.usbExportAddress)
+                                .font(.footnote.monospaced())
+                                .multilineTextAlignment(.trailing)
+                                .autocorrectionDisabled()
+                                .noAutocapitalization()
+                        }
+                    }
+                } header: {
+                    Text(L("Порт USB"))
+                } footer: {
+                    Text(settings.usbExport
+                         ? L("Пока это включено, интернета в госте и восстановления не будет: порт у гостя один, и хост у него один. На маке нужен клиент VirtualHere — он найдёт машину сам (Bonjour, имя «Orchard») или примет адрес руками. Только TCP; гость должен догрузиться до подъёма своего USB.")
+                         : L("Порт гостя можно отдать другой машине по протоколу VirtualHere: мак с клиентом VirtualHere увидит настоящий айфон на своём USB — Finder, usbmuxd, idevice-инструменты. Взамен уходит всё, ради чего порт нужен здесь: интернет в госте и восстановление."))
+                }
             }
         }
         .navigationTitle(L("Сеть"))
@@ -655,12 +673,14 @@ private struct GeneralSettings: View {
 
     var body: some View {
         Form {
-            Section {
-                Toggle(L("Часовой пояс как на телефоне"), isOn: $settings.guestTimeZone)
-            } footer: {
-                Text(L("Часы гостя идут верно, но часовой пояс у образа свой, обычно тихоокеанский, и время на экране гостя расходится с телефоном на несколько часов. Приложение ставит гостю пояс телефона, как только до гостя можно достучаться, и снова, если пояс телефона сменился. Выключите, если выбрали пояс в настройках самого гостя."))
+            if !VMConfig.macGuest {
+                Section {
+                    Toggle(L("Часовой пояс как на телефоне"), isOn: $settings.guestTimeZone)
+                } footer: {
+                    Text(L("Часы гостя идут верно, но часовой пояс у образа свой, обычно тихоокеанский, и время на экране гостя расходится с телефоном на несколько часов. Приложение ставит гостю пояс телефона, как только до гостя можно достучаться, и снова, если пояс телефона сменился. Выключите, если выбрали пояс в настройках самого гостя."))
+                }
+                .onChange(of: settings.guestTimeZone) { _ in model.syncTimeZone(force: true) }
             }
-            .onChange(of: settings.guestTimeZone) { _ in model.syncTimeZone(force: true) }
 
             Section {
                 Picker(L("Язык"), selection: $settings.language) {
@@ -726,32 +746,34 @@ private struct MachineSettings: View {
                 Text(L("Меньше 2 ГБ macOS не загружается: ядро стартует и через несколько секунд перезагружает машину, снова и снова. Под «Потолком iOS» должно поместиться всё приложение: память гостя и ещё около 0.7–1 ГБ на буфер трансляций, графику и сам эмулятор. Без повышенного лимита потолок около 3 ГБ — гостю 2 ГБ; с ним около 4 ГБ — гостю 2.5 ГБ: с 3 ГБ приложение упиралось в потолок, как только открывалось несколько окон. Если приложение закрывается само через какое-то время после запуска — это iOS отбирает память: уменьшите память гостя или буфер трансляций. Насколько близко к потолку, пишется в emulator.log строками «Память»."))
             }
 
-            Section {
-                Toggle(L("Чинить менеджер пакетов при запуске"), isOn: $settings.autoRepairPackages)
-            } header: {
-                Text(L("Патчи"))
-            } footer: {
-                Text(L("Перезагрузка гостя возвращает корень в режим «только чтение» и уносит корневого помощника, без которого Cydia отвечает «cydo returned an error code (2)». Это чинится заново при каждом запуске машины — секунды. Долгие шаги, нужные один раз на образ, остались на кнопке в меню."))
-            }
-
-            Section {
-                Toggle(L("Звук гостя (опыт)"), isOn: $settings.guestAudio)
-            } header: {
-                Text(L("Звук"))
-            } footer: {
-                Text(L("Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Тумблер описывает машине звуковое железо — динамик, шину I2S и сопроцессор, — а без него гостю о звуке не сообщается вовсе. Пока опыт: гость собирает звуковое устройство, но маршрут вывода у него ещё не встаёт, и машина от этих драйверов заметно тяжелеет. Применяется при запуске машины."))
-            }
-
-            // Nothing to switch where there is no taptic engine to play on.
-            if HostHaptics.isSupported {
+            if !VMConfig.macGuest {
                 Section {
-                    Toggle(L("Вибрация гостя"), isOn: $settings.guestHaptics)
-                        .disabled(!settings.guestAudio)
-                        .onChange(of: settings.guestHaptics) { on in
-                            if on { HostHaptics.shared.start() } else { HostHaptics.shared.stop() }
-                        }
+                    Toggle(L("Чинить менеджер пакетов при запуске"), isOn: $settings.autoRepairPackages)
+                } header: {
+                    Text(L("Патчи"))
                 } footer: {
-                    Text(L("Когда гость вибрирует, вибрирует и телефон: машина читает сигнал, которым гость раскачивает свой актуатор, и Taptic Engine повторяет его — в те же моменты, той же длины и той же резкости. Актуатор входит в звуковое железо гостя, поэтому без «Звука гостя» вибрации нет. Переключается сразу, без перезапуска машины."))
+                    Text(L("Перезагрузка гостя возвращает корень в режим «только чтение» и уносит корневого помощника, без которого Cydia отвечает «cydo returned an error code (2)». Это чинится заново при каждом запуске машины — секунды. Долгие шаги, нужные один раз на образ, остались на кнопке в меню."))
+                }
+
+                Section {
+                    Toggle(L("Звук гостя (опыт)"), isOn: $settings.guestAudio)
+                } header: {
+                    Text(L("Звук"))
+                } footer: {
+                    Text(L("Вывод звука на телефоне: своя дорожка через AudioUnit, чужую музыку не глушит и профиль Bluetooth-наушников не портит. Тумблер описывает машине звуковое железо — динамик, шину I2S и сопроцессор, — а без него гостю о звуке не сообщается вовсе. Пока опыт: гость собирает звуковое устройство, но маршрут вывода у него ещё не встаёт, и машина от этих драйверов заметно тяжелеет. Применяется при запуске машины."))
+                }
+
+                // Nothing to switch where there is no taptic engine to play on.
+                if HostHaptics.isSupported {
+                    Section {
+                        Toggle(L("Вибрация гостя"), isOn: $settings.guestHaptics)
+                            .disabled(!settings.guestAudio)
+                            .onChange(of: settings.guestHaptics) { on in
+                                if on { HostHaptics.shared.start() } else { HostHaptics.shared.stop() }
+                            }
+                    } footer: {
+                        Text(L("Когда гость вибрирует, вибрирует и телефон: машина читает сигнал, которым гость раскачивает свой актуатор, и Taptic Engine повторяет его — в те же моменты, той же длины и той же резкости. Актуатор входит в звуковое железо гостя, поэтому без «Звука гостя» вибрации нет. Переключается сразу, без перезапуска машины."))
+                    }
                 }
             }
         }

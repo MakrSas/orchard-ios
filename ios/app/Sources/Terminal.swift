@@ -589,7 +589,7 @@ final class GuestScreen: ObservableObject {
 
     private let term = TerminalEmulator()
     private let filter = KernelFilter()
-    private var hideKernel = true
+    private var hideKernel = !VMConfig.macGuest
     private var consumed = -1
     private var font = PlatformFont.monospacedSystemFont(ofSize: 8, weight: .regular)
 
