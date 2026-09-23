@@ -46,14 +46,16 @@ mkdir -p "$IOS"
 CROSS="$IOS.cross.txt"
 sed -e "s|@SDK@|$sdk|g" -e "s|@TOOLCHAIN@|$toolchain|g" -e "s|@DEPS@|$DEPS|g" \
     "$ROOT/scripts/cross-ios-arm64.txt.in" > "$CROSS.new"
-wipe=()
 if cmp -s "$CROSS.new" "$CROSS"; then
     rm "$CROSS.new"
 else
     mv "$CROSS.new" "$CROSS"
     if [ -f "$IOS/build.ninja" ]; then
+        # Not `meson setup --wipe`: that also deletes the config-host.mak
+        # copied in below, which meson.build cannot do without.
         echo "==> the cross-file changed: setting the build tree up again"
-        wipe=(--wipe)
+        rm -rf "$IOS"
+        mkdir -p "$IOS"
     fi
 fi
 rustup target list --installed | grep -qx aarch64-apple-ios || rustup target add aarch64-apple-ios
@@ -65,10 +67,10 @@ if [ ! -f "$BOOT/config-host.mak" ]; then
         --enable-slirp --disable-werror --with-devices-aarch64=ios)
 fi
 
-if [ ! -f "$IOS/build.ninja" ] || [ ${#wipe[@]} -gt 0 ]; then
+if [ ! -f "$IOS/build.ninja" ]; then
     echo "==> meson setup for iOS"
     cp "$BOOT/config-host.mak" "$IOS/config-host.mak"
-    (cd "$IOS" && "$BOOT/pyvenv/bin/meson" setup ${wipe[@]+"${wipe[@]}"} . .. \
+    (cd "$IOS" && "$BOOT/pyvenv/bin/meson" setup . .. \
         --cross-file="$CROSS" \
         -Dbuildtype=release -Dprefix="$DEPS" \
         -Dshared_lib=true -Db_staticpic=true -Dwerror=false \

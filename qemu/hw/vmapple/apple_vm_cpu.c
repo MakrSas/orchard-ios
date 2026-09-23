@@ -21,6 +21,7 @@
 #include "system/tcg.h"
 #include "hw/vmapple/apple_vm_cpu.h"
 #include "target/arm/cpu.h"
+#include "target/arm/cpu-features.h"
 
 static void apple_vm_cpu_initfn(Object *obj)
 {
@@ -30,6 +31,17 @@ static void apple_vm_cpu_initfn(Object *obj)
      */
     /* 16 KiB target pages, as the machine asks; see apple_vm_page_bits(). */
     ARM_CPU(obj)->min_page_bits = apple_vm_page_bits();
+
+    /*
+     * No BTI. `max` offers it, but no Apple silicon macOS runs on has it, and
+     * under TCG it costs on every indirect branch: a BR checks the target
+     * page's guard bit through probe_access, a TB entered by BLR/BR runs
+     * helper_guarded_page_check, and BTYPE is part of the TB flags, so one
+     * function is translated twice. ORCHARD_BTI=1 keeps it, to compare.
+     */
+    if (g_strcmp0(getenv("ORCHARD_BTI"), "1") != 0) {
+        FIELD_DP64_IDREG(&ARM_CPU(obj)->isar, ID_AA64PFR1, BT, 0);
+    }
 
     if (tcg_enabled()) {
         /*

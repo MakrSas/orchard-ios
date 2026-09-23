@@ -87,6 +87,9 @@ final class EmbeddedDisplay: GuestDisplay {
     private var buffers: [UnsafeMutableRawPointer] = []
     private var bufferBytes = 0
     private var current = 0
+    /// Buffers that missed a whole-frame update and are no longer complete
+    /// frames; one is made whole again only if a partial update lands in it.
+    private var stale = [Bool](repeating: false, count: EmbeddedDisplay.bufferCount)
     private var size = (width: 0, height: 0)
 
     /// Available only once the emulator library is loaded and its machine is up.
@@ -157,9 +160,9 @@ final class EmbeddedDisplay: GuestDisplay {
             case .resize:
                 resize(width: Int(info[Field.width]), height: Int(info[Field.height]))
             case .ok:
-                mirror(rect: (x: Int(info[Field.x]), y: Int(info[Field.y]),
-                              w: Int(info[Field.w]), h: Int(info[Field.h])),
-                       stride: Int(info[Field.stride]))
+                keepComplete(rect: (x: Int(info[Field.x]), y: Int(info[Field.y]),
+                                    w: Int(info[Field.w]), h: Int(info[Field.h])),
+                             stride: Int(info[Field.stride]))
                 publish()
                 current = (current + 1) % EmbeddedDisplay.bufferCount
                 tally.delivered += 1
@@ -282,17 +285,51 @@ final class EmbeddedDisplay: GuestDisplay {
             return buffer
         }
         current = 0
+        stale = [Bool](repeating: false, count: EmbeddedDisplay.bufferCount)
         size = (width, height)
         report(.connected(width: width, height: height))
     }
 
-    /// Copies what was just read into the other buffers, so every one of them
-    /// stays a complete frame while only the changed rows are ever touched.
-    private func mirror(rect: (x: Int, y: Int, w: Int, h: Int), stride: Int) {
+    /// Keeps every buffer that is shown a complete frame, copying no more
+    /// than it has to.
+    ///
+    /// A partial update is mirrored into the other buffers, so the next read
+    /// into any of them only has to touch the rows that change. A whole-frame
+    /// update is not: reims-vgpu presents whole frames, and mirroring those
+    /// was two 8 MB copies a frame on a thread that shares the phone's two
+    /// performance cores with the guest. The other buffers are marked stale
+    /// instead, and a stale buffer that later receives a partial update is
+    /// completed from the frame shown before it.
+    private func keepComplete(rect: (x: Int, y: Int, w: Int, h: Int), stride: Int) {
         guard rect.w > 0, rect.h > 0, buffers.count > 1 else { return }
+        let whole = rect.x == 0 && rect.y == 0 && rect.w >= size.width && rect.h >= size.height
         let source = buffers[current]
+        if whole {
+            for index in buffers.indices where index != current { stale[index] = true }
+            stale[current] = false
+            return
+        }
+        if stale[current] {
+            // Everything outside the update, from the newest complete frame.
+            let previous = buffers[(current + buffers.count - 1) % buffers.count]
+            let rowBytes = size.width * 4
+            for row in 0..<size.height {
+                let base = row * stride
+                if row < rect.y || row >= rect.y + rect.h {
+                    memcpy(source.advanced(by: base), previous.advanced(by: base), rowBytes)
+                } else {
+                    memcpy(source.advanced(by: base), previous.advanced(by: base), rect.x * 4)
+                    let after = (rect.x + rect.w) * 4
+                    if after < rowBytes {
+                        memcpy(source.advanced(by: base + after), previous.advanced(by: base + after),
+                               rowBytes - after)
+                    }
+                }
+            }
+            stale[current] = false
+        }
         let span = rect.w * 4
-        for (index, destination) in buffers.enumerated() where index != current {
+        for (index, destination) in buffers.enumerated() where index != current && !stale[index] {
             for row in rect.y..<(rect.y + rect.h) {
                 let offset = row * stride + rect.x * 4
                 memcpy(destination.advanced(by: offset), source.advanced(by: offset), span)

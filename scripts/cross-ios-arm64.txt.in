@@ -6,6 +6,13 @@
 # installed Xcode and @DEPS@ with the prebuilt C dependencies (glib, gmp,
 # pixman, lzfse, nettle, libpng, libslirp, libtasn1, libucontext; see
 # scripts/fetch-ios-deps.sh), and writes the result into the build tree.
+#
+# The three flags after -D_XOPEN_SOURCE undo QEMU's hardening flags
+# (meson.build: zeroed stack variables, zeroed call-used registers on every
+# return, stack protectors), which come earlier on the command line. They
+# guard a host against a hostile guest; here the host is a phone running
+# its owner's own macOS, and they cost on every tiny TCG helper — the PAC and
+# TB-lookup helpers above all, which run millions of times a second.
 
 [binaries]
 c          = 'clang'
@@ -17,11 +24,11 @@ ranlib     = '@TOOLCHAIN@/usr/bin/ranlib'
 pkg-config = 'pkg-config'
 
 [built-in options]
-c_args      = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0', '-mcpu=apple-a11', '-D_XOPEN_SOURCE', '-I@DEPS@/include']
+c_args      = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0', '-mcpu=apple-a11', '-D_XOPEN_SOURCE', '-ftrivial-auto-var-init=uninitialized', '-fzero-call-used-regs=skip', '-fno-stack-protector', '-I@DEPS@/include']
 c_link_args = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0', '-L@DEPS@/lib', '-framework', 'CoreFoundation', '-lucontext']
 cpp_args    = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0', '-mcpu=apple-a11']
 cpp_link_args = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0', '-L@DEPS@/lib', '-framework', 'CoreFoundation', '-lucontext']
-objc_args   = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0', '-mcpu=apple-a11']
+objc_args   = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0', '-mcpu=apple-a11', '-ftrivial-auto-var-init=uninitialized', '-fzero-call-used-regs=skip', '-fno-stack-protector']
 prefix      = '@DEPS@'
 
 [host_machine]
