@@ -47,3 +47,19 @@ pub(crate) fn emit_resident_color_levels() {
          bytes={bytes} loadable={loadable}"
     ));
 }
+
+/// Where this rail's GPU memory is, as levels: the sampled-texture cache and
+/// everything the `MTLDevice` has allocated. On a phone the second one counts
+/// against the same per-process limit as the guest's RAM, so a figure that
+/// keeps climbing while the cache stays at its budget points at whatever else
+/// this rail keeps — pipelines, retained targets, or objects not released.
+pub(crate) fn emit_metal_memory_levels() {
+    let (sampled, sampled_bytes) = super::sampled_cache::levels();
+    let device_bytes = super::runtime::system_device()
+        .map(|d| d.current_allocated_size())
+        .unwrap_or(0);
+    crate::observe::off(format!(
+        "metal_memory_levels (levels, not per-interval) device_allocated={device_bytes} \
+         sampled_cache={sampled} sampled_cache_bytes={sampled_bytes}"
+    ));
+}

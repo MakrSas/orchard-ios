@@ -115,6 +115,12 @@ pub fn insert(key: u64, texture: &Texture, bytes: u64) {
     });
 }
 
+/// Entries and bytes kept, for the census.
+pub fn levels() -> (usize, u64) {
+    let cache = CACHE.lock();
+    (cache.entries.len(), cache.bytes)
+}
+
 /// A streaming 64-bit hash over the bytes a decode reads, fed in pieces.
 ///
 /// Four independent multiply-xor lanes, so the loop is bound by memory rather

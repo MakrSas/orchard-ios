@@ -213,6 +213,7 @@ impl Backend for MetalBackend {
         if site == CensusSite::Levels {
             super::census::emit_object_cache_levels();
             super::census::emit_resident_color_levels();
+            super::census::emit_metal_memory_levels();
         }
     }
 
