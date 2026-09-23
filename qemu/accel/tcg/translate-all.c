@@ -632,7 +632,14 @@ void tcg_flush_jmp_cache(CPUState *cpu)
         return;
     }
 
-    for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
-        qatomic_set(&jc->array[i].tb, NULL);
+    /*
+     * Retire every entry at once. Only when the generation wraps to zero,
+     * once in four billion flushes, could an entry from long ago look live
+     * again, so then the entries are cleared as they used to be each time.
+     */
+    if (unlikely(qatomic_fetch_inc(&jc->gen) + 1 == 0)) {
+        for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
+            qatomic_set(&jc->array[i].tb, NULL);
+        }
     }
 }
