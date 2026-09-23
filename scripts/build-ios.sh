@@ -37,15 +37,25 @@ JOBS="${JOBS:-$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.
 }
 DEPS="$(cd "$DEPS" && pwd)"
 
-# The cross-file, filled in for this Mac. Rewritten on every run, so a new
-# Xcode is picked up by the next ninja, which re-runs meson when it changes.
+# The cross-file, filled in for this Mac. Meson reads a cross-file's compiler
+# flags only when a build tree is first set up — not on reconfigure — so when
+# it changes (another Xcode, other flags) the tree is set up again from clean.
 sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
 toolchain="$(dirname "$(dirname "$(dirname "$(xcrun --find ar)")")")"
 mkdir -p "$IOS"
-CROSS="$IOS/cross-ios-arm64.txt"
+CROSS="$IOS.cross.txt"
 sed -e "s|@SDK@|$sdk|g" -e "s|@TOOLCHAIN@|$toolchain|g" -e "s|@DEPS@|$DEPS|g" \
     "$ROOT/scripts/cross-ios-arm64.txt.in" > "$CROSS.new"
-if cmp -s "$CROSS.new" "$CROSS"; then rm "$CROSS.new"; else mv "$CROSS.new" "$CROSS"; fi
+wipe=()
+if cmp -s "$CROSS.new" "$CROSS"; then
+    rm "$CROSS.new"
+else
+    mv "$CROSS.new" "$CROSS"
+    if [ -f "$IOS/build.ninja" ]; then
+        echo "==> the cross-file changed: setting the build tree up again"
+        wipe=(--wipe)
+    fi
+fi
 rustup target list --installed | grep -qx aarch64-apple-ios || rustup target add aarch64-apple-ios
 
 if [ ! -f "$BOOT/config-host.mak" ]; then
@@ -55,10 +65,10 @@ if [ ! -f "$BOOT/config-host.mak" ]; then
         --enable-slirp --disable-werror --with-devices-aarch64=ios)
 fi
 
-if [ ! -f "$IOS/build.ninja" ]; then
+if [ ! -f "$IOS/build.ninja" ] || [ ${#wipe[@]} -gt 0 ]; then
     echo "==> meson setup for iOS"
     cp "$BOOT/config-host.mak" "$IOS/config-host.mak"
-    (cd "$IOS" && "$BOOT/pyvenv/bin/meson" setup . .. \
+    (cd "$IOS" && "$BOOT/pyvenv/bin/meson" setup ${wipe[@]+"${wipe[@]}"} . .. \
         --cross-file="$CROSS" \
         -Dbuildtype=release -Dprefix="$DEPS" \
         -Dshared_lib=true -Db_staticpic=true -Dwerror=false \

@@ -377,6 +377,19 @@ typedef struct PauthVACacheEntry {
 
 static __thread PauthVACacheEntry pauth_va_cache[16];
 
+/*
+ * The stage 1 regime these helpers sign for, from the cached hflags rather
+ * than arm_stage1_mmu_idx(): that recomputes the regime from SCTLR, HCR and
+ * the current EL on every call, and on an arm64e guest a PAC helper runs at
+ * nearly every function entry and return. The hflags already hold it — they
+ * are rebuilt whenever anything it depends on changes, and a helper only ever
+ * runs from a TB translated under them.
+ */
+static inline ARMMMUIdx pauth_stage1_mmu_idx(CPUARMState *env)
+{
+    return stage_1_mmu_idx(core_to_aa64_mmu_idx(arm_env_mmu_index(env)));
+}
+
 static ARMVAParameters pauth_va_parameters(CPUARMState *env, uint64_t ptr,
                                            ARMMMUIdx mmu_idx, bool data)
 {
@@ -401,7 +414,7 @@ static uint64_t pauth_addpac(CPUARMState *env, uint64_t ptr, uint64_t modifier,
                              ARMPACKey *key, bool data)
 {
     ARMCPU *cpu = env_archcpu(env);
-    ARMMMUIdx mmu_idx = arm_stage1_mmu_idx(env);
+    ARMMMUIdx mmu_idx = pauth_stage1_mmu_idx(env);
     ARMVAParameters param = pauth_va_parameters(env, ptr, mmu_idx, data);
     ARMPauthFeature pauth_feature = cpu_isar_feature(pauth_feature, cpu);
     uint64_t pac, ext_ptr, ext, test;
@@ -495,7 +508,7 @@ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
                            uintptr_t ra, bool is_combined)
 {
     ARMCPU *cpu = env_archcpu(env);
-    ARMMMUIdx mmu_idx = arm_stage1_mmu_idx(env);
+    ARMMMUIdx mmu_idx = pauth_stage1_mmu_idx(env);
     ARMVAParameters param = pauth_va_parameters(env, ptr, mmu_idx, data);
     ARMPauthFeature pauth_feature = cpu_isar_feature(pauth_feature, cpu);
     int bot_bit, top_bit;
@@ -538,7 +551,7 @@ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
 
 static uint64_t pauth_strip(CPUARMState *env, uint64_t ptr, bool data)
 {
-    ARMMMUIdx mmu_idx = arm_stage1_mmu_idx(env);
+    ARMMMUIdx mmu_idx = pauth_stage1_mmu_idx(env);
     ARMVAParameters param = pauth_va_parameters(env, ptr, mmu_idx, data);
 
     return pauth_original_ptr(ptr, param);

@@ -328,7 +328,7 @@ Inferno на телефоне 256 МБ дают в 2–3 раза больше �
 - **План:** прогнать `configure` нативно (macOS, без всякого iOS) в
   отдельной `build-bootstrap/` только чтобы получить
   `config-host.mak`/`aarch64-softmmu-config-target.mak`, затем поднять
-  отдельный `build-ios/` через `meson setup --cross-file=<build-ios>/cross-ios-arm64.txt (из scripts/cross-ios-arm64.txt.in) -Dshared_lib=true` с теми же опциями, что использовал
+  отдельный `build-ios/` через `meson setup --cross-file=qemu/build-ios.cross.txt (из scripts/cross-ios-arm64.txt.in) -Dshared_lib=true` с теми же опциями, что использовал
   Inferno (`-Dkvm=disabled -Dhvf=disabled -Dgtk=disabled -Dsdl=disabled
   -Dvnc=enabled -Dcoroutine_backend=ucontext` и т.д.), подсунув
   предсгенерированные `.mak`-файлы. Сейчас крутится bootstrap-`configure`.

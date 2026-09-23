@@ -1,6 +1,7 @@
 # Build trees
 qemu/build/
 qemu/build-*/
+qemu/build-*.cross.txt
 reims-vgpu/target/
 
 # Fetched or host-supplied artifacts — none of this is redistributable,

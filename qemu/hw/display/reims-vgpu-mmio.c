@@ -125,6 +125,9 @@ static inline kern_return_t reims_vm_deallocate(vm_map_t task, mach_vm_address_t
 #include "target/arm/cpu.h"
 #endif
 #include <sys/mman.h>
+#ifdef CONFIG_DARWIN
+#include <pthread/qos.h>
+#endif
 
 #define TYPE_REIMS_VGPU_MMIO "reims-vgpu-mmio"
 OBJECT_DECLARE_SIMPLE_TYPE(ReimsVGPUMMIOState, REIMS_VGPU_MMIO)
@@ -951,6 +954,14 @@ static void reims_vgpu_mmio_apply_action(ReimsVGPUMMIOState *s,
 static void *reims_vgpu_mmio_drain_thread(void *opaque)
 {
     ReimsVGPUMMIOState *s = opaque;
+
+#ifdef CONFIG_DARWIN
+    /*
+     * The same class as the vCPU threads (accel/tcg/tcg-accel-ops-mttcg.c):
+     * below them, a busy guest would starve the thread its frames go through.
+     */
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
 
     for (;;) {
         int rc;

@@ -36,6 +36,9 @@
 #include "tcg/startup.h"
 #include "tcg-accel-ops.h"
 #include "tcg-accel-ops-mttcg.h"
+#ifdef CONFIG_DARWIN
+#include <pthread/qos.h>
+#endif
 
 typedef struct MttcgForceRcuNotifier {
     Notifier notifier;
@@ -70,6 +73,18 @@ static void *mttcg_cpu_thread_fn(void *arg)
 
     assert(tcg_enabled());
     g_assert(!icount_enabled());
+
+#ifdef CONFIG_DARWIN
+    /*
+     * A vCPU thread is the guest's CPU, and anything that waits on it waits
+     * on the whole machine. Left at the class it inherits, the scheduler may
+     * park it on an efficiency core — on an iPhone there are two performance
+     * cores and four efficiency ones, and an efficiency core runs translated
+     * code at a fraction of the speed. The highest class keeps it where the
+     * work is fastest whenever there is room.
+     */
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
 
     rcu_register_thread();
     force_rcu.notifier.notify = mttcg_force_rcu;

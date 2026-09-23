@@ -68,7 +68,7 @@ enum Sampler {
             var lines = [L("Профиль: %d замеров, потоков: %d", total, busy.count)]
             lines.append("  " + byGroup.sorted { $0.value > $1.value }
                 .map { "\($0.key) \(percent($0.value))" }.joined(separator: " · "))
-            for (name, n) in bySymbol.sorted(by: { $0.value > $1.value }).prefix(15) {
+            for (name, n) in bySymbol.sorted(by: { $0.value > $1.value }).prefix(30) {
                 lines.append("  \(percent(n))  \(name)")
             }
             completion(lines.joined(separator: "\n"))
