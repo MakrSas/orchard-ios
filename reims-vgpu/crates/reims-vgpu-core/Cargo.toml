@@ -1,0 +1,33 @@
+[package]
+name = "reims-vgpu-core"
+version = "0.1.0"
+edition = "2021"
+description = "The backend-independent semantic model: identities, transactions, dependencies, and completion"
+license = "GPL-2.0-or-later"
+
+[lib]
+name = "reims_vgpu_core"
+
+# What is *not* here is the point. No `ash`, no Metal, no QEMU, no windowing,
+# no host allocator policy: a Vulkan handle, an image layout, a queue family, a
+# guest-RAM pointer or a display surface cannot be named from this crate
+# because none of them is in scope. The semantic model decides what the guest is
+# owed; an executor decides how a host produces it.
+[dependencies]
+# What a decoded wire tag means, and the closure ledger that says which
+# operations the model has to be able to represent at all.
+reims-vgpu-protocol = { path = "../reims-vgpu-protocol" }
+
+# Only the fixture test reads these. The library has no dependencies beyond the
+# protocol crate, which is the claim its dependency list is there to make.
+[dev-dependencies]
+# The oracle capture's loaders, shared with every suite that reads it.
+reims-vgpu-testkit = { path = "../reims-vgpu-testkit" }
+serde_json = "1"
+# The fixture test reads segment headers, which carry no opcode and so have no
+# path through the model. Only the test depends on this.
+reims-vgpu-wire = { path = "../reims-vgpu-wire" }
+
+[build-dependencies]
+# The oracle-capture presence probe, shared with every suite that reads it.
+reims-vgpu-testkit = { path = "../reims-vgpu-testkit" }

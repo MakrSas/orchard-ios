@@ -1,0 +1,5 @@
+# PCI option ROM payload must stay resident after StartImage returns.
+# efi_app (default) is unloaded on return → GOP function pointers dangle and
+# protocols on the image handle are torn down → OpenCore "Missing GOP".
+[target.x86_64-unknown-uefi]
+rustflags = ["-C", "link-arg=/subsystem:efi_boot_service_driver"]

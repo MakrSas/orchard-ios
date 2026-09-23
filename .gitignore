@@ -16,3 +16,6 @@ vm.log
 # QEMU ships an SSH test fixture (tests/keys/id_rsa) that secret scanning
 # blocks on push. Nothing here builds or runs it.
 qemu/tests/keys/
+
+# Local-only field wrapper: kept in the working tree, never committed.
+arm-wrapper/

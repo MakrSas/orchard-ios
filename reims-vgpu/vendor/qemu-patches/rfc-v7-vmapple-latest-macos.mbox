@@ -1,0 +1,1410 @@
+From nobody Sun Jun 21 11:11:12 2026
+Delivered-To: importer@patchew.org
+Authentication-Results: mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass(p=reject dis=none)  header.from=unpredictable.fr
+ARC-Seal: i=1; a=rsa-sha256; t=1774385393; cv=none;
+	d=zohomail.com; s=zohoarc;
+	b=c9OF6ah3fEB7GCQWL/4w0vpSR7d1JuFSVUq9nEa3VHAx05gQJwAKHEfXgi2SCjENo2JZMrj6Ux79aQGV7dWMxGXbLG/Un2BwwDOYs103LYG5ZBVNL+VypgPhks8XFceDVKa0VEc/2xaQ4GpN1527fITLZ/sGpn3q7PZOf5KjjcU=
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=zohomail.com;
+ s=zohoarc;
+	t=1774385393;
+ h=Content-Transfer-Encoding:Cc:Cc:Date:Date:From:From:In-Reply-To:List-Subscribe:List-Post:List-Id:List-Archive:List-Help:List-Unsubscribe:MIME-Version:Message-ID:References:Sender:Subject:Subject:To:To:Message-Id:Reply-To;
+	bh=FBH3qmZPf7N3qFdetPUWzmKqQjMulIkpLcLbzIqxLeM=;
+	b=JLJFx5JafUf+xufOH/2SQU8jGefyxJsXtuaksqeD/9vAjzgWBHLD3TTIvXZvGAl+2kSsI7bl+nh4HgwLnM/DV9qtLWWka/WylnLwKUdaEpjrieHxcYAHlo3fpiSAEylgALP4XOlZXLrKg7CIpCvzpgJxYcnCGHLZF1Xzz965GKk=
+ARC-Authentication-Results: i=1; mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass header.from=<mohamed@unpredictable.fr> (p=reject dis=none)
+Return-Path: <qemu-devel-bounces+importer=patchew.org@nongnu.org>
+Received: from lists.gnu.org (lists.gnu.org [209.51.188.17]) by
+ mx.zohomail.com
+	with SMTPS id 1774385392562496.336172154205;
+ Tue, 24 Mar 2026 13:49:52 -0700 (PDT)
+Received: from localhost ([::1] helo=lists1p.gnu.org)
+	by lists.gnu.org with esmtp (Exim 4.90_1)
+	(envelope-from <qemu-devel-bounces@nongnu.org>)
+	id 1w58gp-0000od-Ba; Tue, 24 Mar 2026 16:49:27 -0400
+Received: from eggs.gnu.org ([2001:470:142:3::10])
+ by lists.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58gl-0000mT-Se
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:23 -0400
+Received: from p-west2-cluster5-host3-snip4-1.eps.apple.com ([57.103.71.84]
+ helo=outbound.mr.icloud.com)
+ by eggs.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58gk-0004dk-2p
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:23 -0400
+Received: from outbound.mr.icloud.com (unknown [127.0.0.2])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPS id
+ 7D8F31800143; Tue, 24 Mar 2026 20:49:19 +0000 (UTC)
+Received: from localhost.localdomain (unknown [17.57.152.38])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPSA id
+ 2473C1800462; Tue, 24 Mar 2026 20:49:13 +0000 (UTC)
+Dkim-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=unpredictable.fr;
+ s=sig1; t=1774385360; x=1776977360;
+ bh=FBH3qmZPf7N3qFdetPUWzmKqQjMulIkpLcLbzIqxLeM=;
+ h=From:To:Subject:Date:Message-ID:MIME-Version:x-icloud-hme;
+ b=atUXs/6l64vYCN8ggJ0bjQtvkYbvgyohXuLNByvnySILtHliY/+Jfphi1AmKuBQVUth+HM0rVqhFT2gEA9tcop1iFRegr9DWeaUhK3lMiMjzNsappCRk9iF7S6aHveof2FsOYgq2V2q4No5rHY7gfAXkw173p3JeplsAGDMzFyuS/wBMC7y4tRW5HjEzMNfDMuyZLHXVY/JUCKoCKIzeauHC5kEiPio8q1ZxWciFHSM3XNTOmIkMPC8a6iYFqmNeSAOLbowd3XmaU+RDtH2lsVIW1uwNdPAOSmqIc0xYdpNbV84nEUYP5zq9EqSxOOqH4AZXJXA2JcAUhVhLGK6+pA==
+mail-alias-created-date: 1752046281608
+From: Mohamed Mediouni <mohamed@unpredictable.fr>
+To: qemu-devel@nongnu.org
+Cc: Akihiko Odaki <odaki@rsg.ci.i.u-tokyo.ac.jp>, qemu-arm@nongnu.org,
+ Peter Maydell <peter.maydell@linaro.org>,
+ =?UTF-8?q?Philippe=20Mathieu-Daud=C3=A9?= <philmd@linaro.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ Phil Dennis-Jordan <phil@philjordan.eu>, Peter Xu <peterx@redhat.com>,
+ Mads Ynddal <mads@ynddal.dk>, Roman Bolshakov <rbolshakov@ddn.com>,
+ Alexander Graf <agraf@csgraf.de>,
+ Mohamed Mediouni <mohamed@unpredictable.fr>
+Subject: [RFC PATCH v7 1/7] vmapple: apple-gfx: make it work on the latest
+ macOS release
+Date: Tue, 24 Mar 2026 21:48:49 +0100
+Message-ID: <20260324204855.29759-2-mohamed@unpredictable.fr>
+X-Mailer: git-send-email 2.50.1
+In-Reply-To: <20260324204855.29759-1-mohamed@unpredictable.fr>
+References: <20260324204855.29759-1-mohamed@unpredictable.fr>
+MIME-Version: 1.0
+Content-Transfer-Encoding: quoted-printable
+X-Proofpoint-GUID: RNBHlEtrobwsmRWf6n1c7nr2-x4BYAUV
+X-Proofpoint-Spam-Details-Enc: AW1haW4tMjYwMzI0MDE2MSBTYWx0ZWRfX7eYvnjC+1YBR
+ yq8FGl8bkeUFMNdv0PndBycSkbKyDL4g6k6kjRJ2NqTk96N3tuNjlrkSgZ6kiYNLJp/YRWSe3D1
+ RTp8NVrg1qf6fbje/7r5Tygo+kO5R9adZ2bZHUHsJ72Xw35NPcMqOj8kepDtdKxk10VLxwWemNI
+ xcmLQncNVgR9pj9Vw8nrfl9xkLeOp2JJQCvQ5Kgbd0NfetjagEOjUTIYbpJzrB9vLuU32U65j4m
+ WFb7KeqdXsmjSDcXlJoDJAzdsmPcDjgRkG/hi+C8dwA4zpioU/lESDdJAHYgRlu1rchRA0PYf3q
+ K2RsF9oJ6j/S5Vpkx7Rm0/pBYDt557QFlJm/53qddhjtVAUeAOfm+gIJV4qFG4=
+X-Authority-Info-Out: v=2.4 cv=Kt5AGGWN c=1 sm=1 tr=0 ts=69c2f8d0
+ cx=c_apl:c_pps:t_out a=9OgfyREA4BUYbbCgc0Y0oA==:117
+ a=9OgfyREA4BUYbbCgc0Y0oA==:17 a=XaNHVGzJZ3ayr3Wv:21 a=Yq5XynenixoA:10
+ a=VkNPw1HP01LnGYTKEx00:22 a=2lQx5wYd1WNrG3klcQkA:9
+X-Proofpoint-ORIG-GUID: RNBHlEtrobwsmRWf6n1c7nr2-x4BYAUV
+X-Proofpoint-Virus-Version: vendor=baseguard
+ engine=ICAP:2.0.293,Aquarius:18.0.1143,Hydra:6.1.51,FMLib:17.12.100.49
+ definitions=2026-03-24_03,2026-03-24_01,2025-10-01_01
+X-Proofpoint-Spam-Details: rule=notspam policy=default score=0 phishscore=0
+ bulkscore=0 mlxlogscore=999 malwarescore=0 lowpriorityscore=0 suspectscore=0
+ mlxscore=0 clxscore=1030 adultscore=0 spamscore=0 classifier=spam authscore=0
+ adjust=0 reason=mlx scancount=1 engine=8.22.0-2601150000
+ definitions=main-2603240161
+Received-SPF: pass (zohomail.com: domain of gnu.org designates 209.51.188.17
+ as permitted sender) client-ip=209.51.188.17;
+ envelope-from=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+ helo=lists.gnu.org;
+Received-SPF: pass client-ip=57.103.71.84;
+ envelope-from=mohamed@unpredictable.fr; helo=outbound.mr.icloud.com
+X-Spam_score_int: -27
+X-Spam_score: -2.8
+X-Spam_bar: --
+X-Spam_report: (-2.8 / 5.0 requ) BAYES_00=-1.9, DKIM_SIGNED=0.1,
+ DKIM_VALID=-0.1, DKIM_VALID_AU=-0.1, DKIM_VALID_EF=-0.1,
+ RCVD_IN_DNSWL_LOW=-0.7, RCVD_IN_VALIDITY_CERTIFIED_BLOCKED=0.001,
+ RCVD_IN_VALIDITY_RPBL_BLOCKED=0.001, SPF_HELO_PASS=-0.001,
+ SPF_PASS=-0.001 autolearn=unavailable autolearn_force=no
+X-Spam_action: no action
+X-BeenThere: qemu-devel@nongnu.org
+X-Mailman-Version: 2.1.29
+Precedence: list
+List-Id: qemu development <qemu-devel.nongnu.org>
+List-Unsubscribe: <https://lists.nongnu.org/mailman/options/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=unsubscribe>
+List-Archive: <https://lists.nongnu.org/archive/html/qemu-devel>
+List-Post: <mailto:qemu-devel@nongnu.org>
+List-Help: <mailto:qemu-devel-request@nongnu.org?subject=help>
+List-Subscribe: <https://lists.nongnu.org/mailman/listinfo/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=subscribe>
+Errors-To: qemu-devel-bounces+importer=patchew.org@nongnu.org
+Sender: qemu-devel-bounces+importer=patchew.org@nongnu.org
+X-ZohoMail-DKIM: pass (identity @unpredictable.fr)
+X-ZM-MESSAGEID: 1774385399838158500
+Content-Type: text/plain; charset="utf-8"
+
+Follow changes in memory management introduced on macOS 15.4.
+
+The legacy memory management API has been removed for the IOSurface mapper =
+on that macOS version.
+
+Also enable process isolation for a sandboxed GPU process when on a new OS.
+
+Signed-off-by: Mohamed Mediouni <mohamed@unpredictable.fr>
+---
+ hw/display/apple-gfx-mmio.m | 59 ++++++++++++++++++++++++++++---------
+ hw/display/apple-gfx.h      | 16 ++++++++++
+ hw/display/apple-gfx.m      | 41 +++++++++++++++++++++++++-
+ 3 files changed, 101 insertions(+), 15 deletions(-)
+
+diff --git a/hw/display/apple-gfx-mmio.m b/hw/display/apple-gfx-mmio.m
+index 58beaadd1f..cc1f8cfcad 100644
+--- a/hw/display/apple-gfx-mmio.m
++++ b/hw/display/apple-gfx-mmio.m
+@@ -19,6 +19,7 @@
+ #include "hw/core/irq.h"
+ #include "apple-gfx.h"
+ #include "trace.h"
++#include "system/address-spaces.h"
+=20
+ #import <ParavirtualizedGraphics/ParavirtualizedGraphics.h>
+=20
+@@ -36,12 +37,19 @@ typedef bool(^IOSFCMapMemory)(uint64_t phys, uint64_t l=
+en, bool ro, void **va,
+=20
+ @interface PGDeviceDescriptor (IOSurfaceMapper)
+ @property (readwrite, nonatomic) bool usingIOSurfaceMapper;
++@property (readwrite, nonatomic) bool enableArgumentBuffers;
++@property (readwrite, nonatomic) bool enableProcessIsolation;
++@property (readwrite, nonatomic) bool enableProtectedContent;
++
++@property (readwrite, nonatomic, copy, nullable) PGMemoryMapDescriptor* me=
+moryMapDescriptor;
+ @end
+=20
+ @interface PGIOSurfaceHostDeviceDescriptor : NSObject
+ -(PGIOSurfaceHostDeviceDescriptor *)init;
+ @property (readwrite, nonatomic, copy, nullable) IOSFCMapMemory mapMemory;
+ @property (readwrite, nonatomic, copy, nullable) IOSFCUnmapMemory unmapMem=
+ory;
++@property (readwrite, nonatomic, copy, nullable) PGMemoryMapDescriptor* me=
+moryMapDescriptor;
++@property (readwrite, nonatomic) unsigned long long mmioLength;
+ @property (readwrite, nonatomic, copy, nullable) IOSFCRaiseInterrupt raise=
+Interrupt;
+ @end
+=20
+@@ -183,19 +191,32 @@ static bool apple_gfx_mmio_unmap_surface_memory(void =
+*ptr)
+         [PGIOSurfaceHostDeviceDescriptor new];
+     PGIOSurfaceHostDevice *iosfc_host_dev;
+=20
+-    iosfc_desc.mapMemory =3D
+-        ^bool(uint64_t phys, uint64_t len, bool ro, void **va, void *e, vo=
+id *f) {
+-            *va =3D apple_gfx_mmio_map_surface_memory(phys, len, ro);
+-
+-            trace_apple_gfx_iosfc_map_memory(phys, len, ro, va, e, f, *va);
+-
+-            return *va !=3D NULL;
+-        };
+-
+-    iosfc_desc.unmapMemory =3D
+-        ^bool(void *va, void *b, void *c, void *d, void *e, void *f) {
+-            return apple_gfx_mmio_unmap_surface_memory(va);
+-        };
++    /*
++     * The legacy memory management API is no longer present
++     * for the IOSurface mapper as of macOS 15.4.
++     */
++    if (@available(macOS 15.4, *)) {
++        PGMemoryMapDescriptor *memory_map_descriptor =3D [PGMemoryMapDescr=
+iptor new];
++        FlatView* fv =3D address_space_to_flatview(&address_space_memory);
++        flatview_for_each_range(fv, apple_gfx_register_memory_cb, memory_m=
+ap_descriptor);
++        /* the device model defines this as a single-page MMIO region, hen=
+ce 16KB */
++        iosfc_desc.mmioLength =3D 0x10000;
++        iosfc_desc.memoryMapDescriptor =3D memory_map_descriptor;
++    } else {
++        iosfc_desc.mapMemory =3D
++            ^bool(uint64_t phys, uint64_t len, bool ro, void **va, void *e=
+, void *f) {
++                *va =3D apple_gfx_mmio_map_surface_memory(phys, len, ro);
++
++                trace_apple_gfx_iosfc_map_memory(phys, len, ro, va, e, f, =
+*va);
++
++                return *va !=3D NULL;
++            };
++
++        iosfc_desc.unmapMemory =3D
++            ^bool(void *va, void *b, void *c, void *d, void *e, void *f) {
++                return apple_gfx_mmio_unmap_surface_memory(va);
++            };
++    }
+=20
+     iosfc_desc.raiseInterrupt =3D ^bool(uint32_t vector) {
+         trace_apple_gfx_iosfc_raise_irq(vector);
+@@ -223,13 +244,23 @@ static void apple_gfx_mmio_realize(DeviceState *dev, =
+Error **errp)
+         };
+=20
+         desc.usingIOSurfaceMapper =3D true;
+-        s->pgiosfc =3D apple_gfx_prepare_iosurface_host_device(s);
++        desc.enableArgumentBuffers =3D true;
++        /*=20
++         * Process isolation needs PGMemoryMapDescriptor instead of
++         * the legacy memory management interface present in releases
++         * older than macOS 15.4.
++         */
++        if (@available(macOS 15.4, *)) {
++            desc.enableProcessIsolation =3D true;
++        }
+=20
+         if (!apple_gfx_common_realize(&s->common, dev, desc, errp)) {
+             [s->pgiosfc release];
+             s->pgiosfc =3D nil;
+         }
+=20
++        s->pgiosfc =3D apple_gfx_prepare_iosurface_host_device(s);
++
+         [desc release];
+         desc =3D nil;
+     }
+diff --git a/hw/display/apple-gfx.h b/hw/display/apple-gfx.h
+index 3197bd853d..384aee0c5f 100644
+--- a/hw/display/apple-gfx.h
++++ b/hw/display/apple-gfx.h
+@@ -12,6 +12,7 @@
+ #include "system/memory.h"
+ #include "hw/core/qdev-properties.h"
+ #include "ui/surface.h"
++#include "objc/NSObject.h"
+=20
+ #define TYPE_APPLE_GFX_MMIO         "apple-gfx-mmio"
+ #define TYPE_APPLE_GFX_PCI          "apple-gfx-pci"
+@@ -23,6 +24,17 @@
+ @protocol MTLTexture;
+ @protocol MTLCommandQueue;
+=20
++typedef struct PGGuestPhysicalRange_s
++{
++    uint64_t physicalAddress;
++    uint64_t physicalLength;
++    void *hostAddress;
++} PGGuestPhysicalRange_t;
++
++@interface PGMemoryMapDescriptor : NSObject
++-(void)addRange:(PGGuestPhysicalRange_t) range;
++@end
++
+ typedef QTAILQ_HEAD(, PGTask_s) PGTaskList;
+=20
+ typedef struct AppleGFXDisplayMode {
+@@ -68,6 +80,10 @@ void *apple_gfx_host_ptr_for_gpa_range(uint64_t guest_ph=
+ysical,
+                                        uint64_t length, bool read_only,
+                                        MemoryRegion **mapping_in_region);
+=20
++bool apple_gfx_register_memory_cb(Int128 start, Int128 len,
++                                  const MemoryRegion *mr,
++                                  hwaddr offset_in_region, void *opaque);
++
+ extern const PropertyInfo qdev_prop_apple_gfx_display_mode;
+=20
+ #endif
+diff --git a/hw/display/apple-gfx.m b/hw/display/apple-gfx.m
+index e0a765fcb1..213233084d 100644
+--- a/hw/display/apple-gfx.m
++++ b/hw/display/apple-gfx.m
+@@ -21,6 +21,7 @@
+ #include "system/address-spaces.h"
+ #include "system/dma.h"
+ #include "migration/blocker.h"
++#include "system/memory.h"
+ #include "ui/console.h"
+ #include "apple-gfx.h"
+ #include "trace.h"
+@@ -596,6 +597,35 @@ void apple_gfx_common_init(Object *obj, AppleGFXState =
+*s, const char* obj_name)
+     /* TODO: PVG framework supports serialising device state: integrate it=
+! */
+ }
+=20
++@interface PGDeviceDescriptor (IOSurfaceMapper)
++@property (readwrite, nonatomic, copy, nullable) PGMemoryMapDescriptor* me=
+moryMapDescriptor;
++@end
++
++bool apple_gfx_register_memory_cb(Int128 start, Int128 len,
++                                  const MemoryRegion *mr,
++                                  hwaddr offset_in_region, void *opaque) {
++    PGGuestPhysicalRange_t range;
++    PGMemoryMapDescriptor *memory_map_descriptor =3D opaque;
++    if (memory_access_is_direct(mr, true, MEMTXATTRS_UNSPECIFIED)) {
++        range.physicalAddress =3D start;
++        range.physicalLength =3D len;
++        range.hostAddress =3D memory_region_get_ram_ptr(mr);
++        [memory_map_descriptor addRange:range];
++    }
++    return false;
++}
++
++static void apple_gfx_register_memory(AppleGFXState *s,
++                                                     PGDeviceDescriptor *d=
+esc)
++{
++    PGMemoryMapDescriptor* memoryMapDescriptor =3D [PGMemoryMapDescriptor =
+new];
++
++    FlatView* fv =3D address_space_to_flatview(&address_space_memory);
++    flatview_for_each_range(fv, apple_gfx_register_memory_cb, memoryMapDes=
+criptor);
++
++    desc.memoryMapDescriptor =3D memoryMapDescriptor;
++}
++
+ static void apple_gfx_register_task_mapping_handlers(AppleGFXState *s,
+                                                      PGDeviceDescriptor *d=
+esc)
+ {
+@@ -763,7 +793,16 @@ bool apple_gfx_common_realize(AppleGFXState *s, Device=
+State *dev,
+=20
+     desc.device =3D s->mtl;
+=20
+-    apple_gfx_register_task_mapping_handlers(s, desc);
++    /*=20
++     * The legacy memory management interface doesn't allow for
++     * vGPU sandboxing. As such, always use the new interface
++     * on macOS 15.4 onwards.=20
++     */
++    if (@available(macOS 15.4, *)) {
++        apple_gfx_register_memory(s, desc);
++    } else {
++        apple_gfx_register_task_mapping_handlers(s, desc);
++    }
+=20
+     s->cursor_show =3D true;
+=20
+--=20
+2.50.1 (Apple Git-155)
+From nobody Sun Jun 21 11:11:12 2026
+Delivered-To: importer@patchew.org
+Authentication-Results: mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass(p=reject dis=none)  header.from=unpredictable.fr
+ARC-Seal: i=1; a=rsa-sha256; t=1774385440; cv=none;
+	d=zohomail.com; s=zohoarc;
+	b=S2wHu/DRVygQ23601a+L0XxV6yrmsyke3EkHcMRHKGiCWRYCU1h2xeeXQ9G7E8K0uykio50mgKf34ZH5NKeoRLFZMumf4OHsxIcftScPWeV1ysCsExUb4mgS41zNAR/REzuCykSNyYsfWpiD3yY2ZSqCRedk4dyunicH8nddDnU=
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=zohomail.com;
+ s=zohoarc;
+	t=1774385440;
+ h=Content-Transfer-Encoding:Cc:Cc:Date:Date:From:From:In-Reply-To:List-Subscribe:List-Post:List-Id:List-Archive:List-Help:List-Unsubscribe:MIME-Version:Message-ID:References:Sender:Subject:Subject:To:To:Message-Id:Reply-To;
+	bh=CLyeZj/GfOb93UxqHuC1UwrRT6SXCCYzhO+nvypMIRo=;
+	b=CoL2mX2zOp9lvi1aEe32IplVZ+WRDKI+8iaHiKCRSWQy4n4ODcuIhpqzunuDgr+dt3N53s+aZDhVsmzVahdoT0viJp0j0oGf2WQP3P+Rmm9+4/4uJI8qDS+gIYnohKDBCtkfUJwquafA5CdxiwNI/n4U5hllDsMY645MlvD60yM=
+ARC-Authentication-Results: i=1; mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass header.from=<mohamed@unpredictable.fr> (p=reject dis=none)
+Return-Path: <qemu-devel-bounces+importer=patchew.org@nongnu.org>
+Received: from lists.gnu.org (lists.gnu.org [209.51.188.17]) by
+ mx.zohomail.com
+	with SMTPS id 177438544029298.46316189707682;
+ Tue, 24 Mar 2026 13:50:40 -0700 (PDT)
+Received: from localhost ([::1] helo=lists1p.gnu.org)
+	by lists.gnu.org with esmtp (Exim 4.90_1)
+	(envelope-from <qemu-devel-bounces@nongnu.org>)
+	id 1w58h5-0000vE-4d; Tue, 24 Mar 2026 16:49:44 -0400
+Received: from eggs.gnu.org ([2001:470:142:3::10])
+ by lists.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58gw-0000pZ-AH
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:35 -0400
+Received: from p-west2-cluster5-host12-snip4-10.eps.apple.com ([57.103.71.23]
+ helo=outbound.mr.icloud.com)
+ by eggs.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58gt-0004e9-QT
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:34 -0400
+Received: from outbound.mr.icloud.com (unknown [127.0.0.2])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPS id
+ ABC171800455; Tue, 24 Mar 2026 20:49:23 +0000 (UTC)
+Received: from localhost.localdomain (unknown [17.57.152.38])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPSA id
+ B9ADD1800444; Tue, 24 Mar 2026 20:49:19 +0000 (UTC)
+Dkim-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=unpredictable.fr;
+ s=sig1; t=1774385364; x=1776977364;
+ bh=CLyeZj/GfOb93UxqHuC1UwrRT6SXCCYzhO+nvypMIRo=;
+ h=From:To:Subject:Date:Message-ID:MIME-Version:x-icloud-hme;
+ b=YHLrR3e2drM6JqCVE/zD93YxiM591d2Li1MWlr7QTAnsBPEgaapfvzvCYzZUab6u9HtliT5Irh9Niew9cgxRyW1b1162LzpEBdO/NTwmkVkaYI/Wqv+RRgNNifUh1FVBxAxGg12dLT8CQdhs4dTv8Pi0Xzjo7iXu17nejrpVYtJMxxPF+EEbiWTd/7FH6aXiS6vnBOq1SMVv+8d3nIOQkkEgdVG+ESC2TtzN8yz4XtwnIYbVFeVcBpPjpA2IKKtOnwLggtsoDJu0UgwWozBhTcFTdvW+otdjbE3GjjUazJtTzk2UkQM1ssqIm7Tcq+MPX/yIXb5DaO+pZWcULZ4wcw==
+mail-alias-created-date: 1752046281608
+From: Mohamed Mediouni <mohamed@unpredictable.fr>
+To: qemu-devel@nongnu.org
+Cc: Akihiko Odaki <odaki@rsg.ci.i.u-tokyo.ac.jp>, qemu-arm@nongnu.org,
+ Peter Maydell <peter.maydell@linaro.org>,
+ =?UTF-8?q?Philippe=20Mathieu-Daud=C3=A9?= <philmd@linaro.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ Phil Dennis-Jordan <phil@philjordan.eu>, Peter Xu <peterx@redhat.com>,
+ Mads Ynddal <mads@ynddal.dk>, Roman Bolshakov <rbolshakov@ddn.com>,
+ Alexander Graf <agraf@csgraf.de>,
+ Mohamed Mediouni <mohamed@unpredictable.fr>
+Subject: [RFC PATCH v7 2/7] hw/vmapple: aes: convert MAX_LEN to a #define
+Date: Tue, 24 Mar 2026 21:48:50 +0100
+Message-ID: <20260324204855.29759-3-mohamed@unpredictable.fr>
+X-Mailer: git-send-email 2.50.1
+In-Reply-To: <20260324204855.29759-1-mohamed@unpredictable.fr>
+References: <20260324204855.29759-1-mohamed@unpredictable.fr>
+MIME-Version: 1.0
+Content-Transfer-Encoding: quoted-printable
+X-Proofpoint-GUID: z_dy_z5nbP2qRh63tb_SEwOrC_EnwgBs
+X-Proofpoint-Spam-Details-Enc: AW1haW4tMjYwMzI0MDE2MSBTYWx0ZWRfX11GXr3MBspyw
+ o9PrqMEuZ92wQTTAVLrXR5eqPVwRJemxsxiRt+fR1BVbpbRqT1dvVp2Qjrh+yGAqUL7zcs9StgG
+ leY5tf3V4M3gzBKl8WQtpZ4PXs94GLLHumDc5w/UsvJ/XZBu5qegdgaVQL3A1srPETaPFjQJmPX
+ OJ5I799W/XTt3vq6ZqOTtnwiedPNXAhmcxwWkZ8vv6+i9MG1GFb2QB+2R+on4T+EUpm76NRaK+J
+ aT0Da5x/mpB5L4DEgKGQyMYGPzeB2u4yGzCsCbylofDdmCjiToF7uP3hidlXvTuQ4OfiSTLFYYi
+ mTwThXVCVAeuZmonKOXys0xj+jCDAXhl/2cEjUyyvyztwPqoNlaxwpHIefFejk=
+X-Proofpoint-ORIG-GUID: z_dy_z5nbP2qRh63tb_SEwOrC_EnwgBs
+X-Authority-Info-Out: v=2.4 cv=ceffb3DM c=1 sm=1 tr=0 ts=69c2f8d4
+ cx=c_apl:c_pps:t_out a=9OgfyREA4BUYbbCgc0Y0oA==:117
+ a=9OgfyREA4BUYbbCgc0Y0oA==:17 a=Yq5XynenixoA:10 a=VkNPw1HP01LnGYTKEx00:22
+ a=CNpkFlK3StMqgsPjqO8A:9
+X-Proofpoint-Virus-Version: vendor=baseguard
+ engine=ICAP:2.0.293,Aquarius:18.0.1143,Hydra:6.1.51,FMLib:17.12.100.49
+ definitions=2026-03-24_03,2026-03-24_01,2025-10-01_01
+X-Proofpoint-Spam-Details: rule=notspam policy=default score=0 spamscore=0
+ malwarescore=0 mlxlogscore=783 clxscore=1030 bulkscore=0 mlxscore=0
+ phishscore=0 suspectscore=0 adultscore=0 lowpriorityscore=0 classifier=spam
+ authscore=0 adjust=0 reason=mlx scancount=1 engine=8.22.0-2601150000
+ definitions=main-2603240161
+Received-SPF: pass (zohomail.com: domain of gnu.org designates 209.51.188.17
+ as permitted sender) client-ip=209.51.188.17;
+ envelope-from=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+ helo=lists.gnu.org;
+Received-SPF: pass client-ip=57.103.71.23;
+ envelope-from=mohamed@unpredictable.fr; helo=outbound.mr.icloud.com
+X-Spam_score_int: -27
+X-Spam_score: -2.8
+X-Spam_bar: --
+X-Spam_report: (-2.8 / 5.0 requ) BAYES_00=-1.9, DKIM_SIGNED=0.1,
+ DKIM_VALID=-0.1, DKIM_VALID_AU=-0.1, DKIM_VALID_EF=-0.1,
+ RCVD_IN_DNSWL_LOW=-0.7, RCVD_IN_MSPIKE_H2=0.001,
+ RCVD_IN_VALIDITY_CERTIFIED_BLOCKED=0.001,
+ RCVD_IN_VALIDITY_RPBL_BLOCKED=0.001,
+ SPF_HELO_PASS=-0.001, SPF_PASS=-0.001 autolearn=ham autolearn_force=no
+X-Spam_action: no action
+X-BeenThere: qemu-devel@nongnu.org
+X-Mailman-Version: 2.1.29
+Precedence: list
+List-Id: qemu development <qemu-devel.nongnu.org>
+List-Unsubscribe: <https://lists.nongnu.org/mailman/options/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=unsubscribe>
+List-Archive: <https://lists.nongnu.org/archive/html/qemu-devel>
+List-Post: <mailto:qemu-devel@nongnu.org>
+List-Help: <mailto:qemu-devel-request@nongnu.org?subject=help>
+List-Subscribe: <https://lists.nongnu.org/mailman/listinfo/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=subscribe>
+Errors-To: qemu-devel-bounces+importer=patchew.org@nongnu.org
+Sender: qemu-devel-bounces+importer=patchew.org@nongnu.org
+X-ZohoMail-DKIM: pass (identity @unpredictable.fr)
+X-ZM-MESSAGEID: 1774385442837154100
+Content-Type: text/plain; charset="utf-8"
+
+Working around this compiler warning:
+
+../hw/vmapple/aes.c:257:14: warning: variable length array folded to consta=
+nt array as an extension [-Wgnu-folding-constant]
+  257 |     char hex[MAX_LEN * 2 + 1] =3D "";
+      |              ^~~~~~~~~~~~~~~
+1 warning generated.
+
+Signed-off-by: Mohamed Mediouni <mohamed@unpredictable.fr>
+---
+ hw/vmapple/aes.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hw/vmapple/aes.c b/hw/vmapple/aes.c
+index 553e688adb..9d062d5a7f 100644
+--- a/hw/vmapple/aes.c
++++ b/hw/vmapple/aes.c
+@@ -253,7 +253,7 @@ static bool cmd_iv(AESState *s)
+=20
+ static void dump_data(const char *desc, const void *p, size_t len)
+ {
+-    static const size_t MAX_LEN =3D 0x1000;
++#define MAX_LEN  0x1000
+     char hex[MAX_LEN * 2 + 1] =3D "";
+=20
+     if (len > MAX_LEN) {
+@@ -262,6 +262,7 @@ static void dump_data(const char *desc, const void *p, =
+size_t len)
+=20
+     qemu_hexdump_to_buffer(hex, sizeof(hex), p, len);
+     trace_aes_dump_data(desc, hex);
++#undef MAX_LEN
+ }
+=20
+ static bool cmd_data(AESState *s)
+--=20
+2.50.1 (Apple Git-155)
+From nobody Sun Jun 21 11:11:12 2026
+Delivered-To: importer@patchew.org
+Authentication-Results: mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass(p=reject dis=none)  header.from=unpredictable.fr
+ARC-Seal: i=1; a=rsa-sha256; t=1774385450; cv=none;
+	d=zohomail.com; s=zohoarc;
+	b=UE2y9wgz+m7CLNfAQUkvgLKxmocnHk4PeQWRx5C4m2UCkGcO9+9UUWXPUJf7fg7NgHG2QZDAbyhsT7Rf+ykXPpioIeYI8IyGGOCjSuyISGBRLuHjYlaSR7SwX6sko6NtTe+lZhg278nR7M0+t831LyQe+hcm6XrCyyJxzPRJ1II=
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=zohomail.com;
+ s=zohoarc;
+	t=1774385450;
+ h=Content-Transfer-Encoding:Cc:Cc:Date:Date:From:From:In-Reply-To:List-Subscribe:List-Post:List-Id:List-Archive:List-Help:List-Unsubscribe:MIME-Version:Message-ID:References:Sender:Subject:Subject:To:To:Message-Id:Reply-To;
+	bh=nm6wNACUc6oJfXfhk2HnxauS/oa1dPEthQQE43aZl7o=;
+	b=ENK6oMAlT7hPaiZR2ACzVDkF5VHGDp0xhRQ1kDfQg5bBy7DcfgmEZEvXHNvZB3CYXeyoYud5w61s8Hpb9Pu4ncJY+FTfg6vW2RyFc8EtGk9MF14MRhZ1mJ3nkHsLPB1CI9GQ/L6g8tXayUlLFwTlb+bMp3NC8BvQgA+aC6XnKUA=
+ARC-Authentication-Results: i=1; mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass header.from=<mohamed@unpredictable.fr> (p=reject dis=none)
+Return-Path: <qemu-devel-bounces+importer=patchew.org@nongnu.org>
+Received: from lists.gnu.org (lists.gnu.org [209.51.188.17]) by
+ mx.zohomail.com
+	with SMTPS id 177438545008992.22928949029347;
+ Tue, 24 Mar 2026 13:50:50 -0700 (PDT)
+Received: from localhost ([::1] helo=lists1p.gnu.org)
+	by lists.gnu.org with esmtp (Exim 4.90_1)
+	(envelope-from <qemu-devel-bounces@nongnu.org>)
+	id 1w58h8-0000wV-RZ; Tue, 24 Mar 2026 16:49:46 -0400
+Received: from eggs.gnu.org ([2001:470:142:3::10])
+ by lists.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58h0-0000qS-0j
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:39 -0400
+Received: from p-west2-cluster5-host3-snip4-10.eps.apple.com ([57.103.71.93]
+ helo=outbound.mr.icloud.com)
+ by eggs.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58gv-0004f6-6F
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:35 -0400
+Received: from outbound.mr.icloud.com (unknown [127.0.0.2])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPS id
+ 5B12F1800477; Tue, 24 Mar 2026 20:49:28 +0000 (UTC)
+Received: from localhost.localdomain (unknown [17.57.152.38])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPSA id
+ C109C18000A6; Tue, 24 Mar 2026 20:49:23 +0000 (UTC)
+Dkim-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=unpredictable.fr;
+ s=sig1; t=1774385372; x=1776977372;
+ bh=nm6wNACUc6oJfXfhk2HnxauS/oa1dPEthQQE43aZl7o=;
+ h=From:To:Subject:Date:Message-ID:MIME-Version:x-icloud-hme;
+ b=eCWV0XB+EItLd6eFJ1j1VJ3WfArualCmA4SEGZH/qoVKLs/NKMAlUJkNCq/0pqKnX3YgcohspE9yRDq8KSVdgxnA9HjAM70MuynKW6YTv1INN6JJ6QdMnp9SFWqUdKPT1KP+27j1l/VFlb1aHx5bPwnSOcmO+5QRXBXBFSsZaLm/ojOFbQ/aNVsJD15aoYvz95en6d5Nx69hDK7VwwdqEtv//6Mf3wQF2jw9H0g4JOiPfM7IM+wsEUjwZabxxUVj+eGt4KG5CXJDXH7J4H2y9tAviDyt/LH67nKIqrQJKKTRLNfpXMuIwj3FpPI9GW6P/Xdm3LEnAizoVSZc13XRjg==
+mail-alias-created-date: 1752046281608
+From: Mohamed Mediouni <mohamed@unpredictable.fr>
+To: qemu-devel@nongnu.org
+Cc: Akihiko Odaki <odaki@rsg.ci.i.u-tokyo.ac.jp>, qemu-arm@nongnu.org,
+ Peter Maydell <peter.maydell@linaro.org>,
+ =?UTF-8?q?Philippe=20Mathieu-Daud=C3=A9?= <philmd@linaro.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ Phil Dennis-Jordan <phil@philjordan.eu>, Peter Xu <peterx@redhat.com>,
+ Mads Ynddal <mads@ynddal.dk>, Roman Bolshakov <rbolshakov@ddn.com>,
+ Alexander Graf <agraf@csgraf.de>,
+ Mohamed Mediouni <mohamed@unpredictable.fr>
+Subject: [RFC PATCH v7 3/7] vmapple: declare it as an AArch64-compatible
+ machine
+Date: Tue, 24 Mar 2026 21:48:51 +0100
+Message-ID: <20260324204855.29759-4-mohamed@unpredictable.fr>
+X-Mailer: git-send-email 2.50.1
+In-Reply-To: <20260324204855.29759-1-mohamed@unpredictable.fr>
+References: <20260324204855.29759-1-mohamed@unpredictable.fr>
+MIME-Version: 1.0
+Content-Transfer-Encoding: quoted-printable
+X-Proofpoint-ORIG-GUID: FBQT9ZHTJr76LgLkspfcXGFi5XQu-PXB
+X-Proofpoint-Spam-Details-Enc: AW1haW4tMjYwMzI0MDE2MSBTYWx0ZWRfXxztmnqdwDQnJ
+ i+7QCGe8A2iITisYsdy5YiTrlVzIAL1IZjJUbm6UPBIB29HKm78aRo0Fp2laytAEJ5u8ayZOtdx
+ X8Uao3lbWql1P+eX+oQpFLGUKrKgVnKyNyvpBpU0U6wYjR0dhkOUer9qCijsYBiNq7+LoPn98Sa
+ j1h2nR6fDU0dFREkPyQqmxtU88rb2x6Y+/wl32FIDsfyrOkX96Ti4VEzTAl6/Tzpq+oRdz3z6Vg
+ SqHgzp/YxXkA1961jAiZQlc22+roWLVMlzI4c6SIr5/OktItOG94u6NQ6mdDYdjoKS3ncrf9gRi
+ Wbo22ryT3ykbVbVVrQkUcg1fj9RN7k/zA+zeXfmvpQFczcB8DseNDDdaZpAH/k=
+X-Proofpoint-GUID: FBQT9ZHTJr76LgLkspfcXGFi5XQu-PXB
+X-Authority-Info-Out: v=2.4 cv=A8th/qWG c=1 sm=1 tr=0 ts=69c2f8da
+ cx=c_apl:c_pps:t_out a=9OgfyREA4BUYbbCgc0Y0oA==:117
+ a=9OgfyREA4BUYbbCgc0Y0oA==:17 a=Yq5XynenixoA:10 a=VkNPw1HP01LnGYTKEx00:22
+ a=bL7GquhI8jtPFrN7dBAA:9
+X-Proofpoint-Virus-Version: vendor=baseguard
+ engine=ICAP:2.0.293,Aquarius:18.0.1143,Hydra:6.1.51,FMLib:17.12.100.49
+ definitions=2026-03-24_03,2026-03-24_01,2025-10-01_01
+X-Proofpoint-Spam-Details: rule=notspam policy=default score=0 malwarescore=0
+ lowpriorityscore=0 mlxscore=0 bulkscore=0
+ adultscore=0 mlxlogscore=872
+ phishscore=0 clxscore=1030 spamscore=0 suspectscore=0 classifier=spam
+ authscore=0 adjust=0 reason=mlx scancount=1 engine=8.22.0-2601150000
+ definitions=main-2603240161
+Received-SPF: pass (zohomail.com: domain of gnu.org designates 209.51.188.17
+ as permitted sender) client-ip=209.51.188.17;
+ envelope-from=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+ helo=lists.gnu.org;
+Received-SPF: pass client-ip=57.103.71.93;
+ envelope-from=mohamed@unpredictable.fr; helo=outbound.mr.icloud.com
+X-Spam_score_int: -27
+X-Spam_score: -2.8
+X-Spam_bar: --
+X-Spam_report: (-2.8 / 5.0 requ) BAYES_00=-1.9, DKIM_SIGNED=0.1,
+ DKIM_VALID=-0.1, DKIM_VALID_AU=-0.1, DKIM_VALID_EF=-0.1,
+ RCVD_IN_DNSWL_LOW=-0.7, RCVD_IN_MSPIKE_H4=0.001, RCVD_IN_MSPIKE_WL=0.001,
+ RCVD_IN_VALIDITY_CERTIFIED_BLOCKED=0.001,
+ RCVD_IN_VALIDITY_RPBL_BLOCKED=0.001,
+ SPF_HELO_PASS=-0.001, SPF_PASS=-0.001 autolearn=ham autolearn_force=no
+X-Spam_action: no action
+X-BeenThere: qemu-devel@nongnu.org
+X-Mailman-Version: 2.1.29
+Precedence: list
+List-Id: qemu development <qemu-devel.nongnu.org>
+List-Unsubscribe: <https://lists.nongnu.org/mailman/options/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=unsubscribe>
+List-Archive: <https://lists.nongnu.org/archive/html/qemu-devel>
+List-Post: <mailto:qemu-devel@nongnu.org>
+List-Help: <mailto:qemu-devel-request@nongnu.org?subject=help>
+List-Subscribe: <https://lists.nongnu.org/mailman/listinfo/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=subscribe>
+Errors-To: qemu-devel-bounces+importer=patchew.org@nongnu.org
+Sender: qemu-devel-bounces+importer=patchew.org@nongnu.org
+X-ZohoMail-DKIM: pass (identity @unpredictable.fr)
+X-ZM-MESSAGEID: 1774385451648154100
+Content-Type: text/plain; charset="utf-8"
+
+.interfaces =3D aarch64_machine_interfaces is expected for
+AArch64 machines now. Consider vmapple as an AArch64-only
+machine
+
+Signed-off-by: Mohamed Mediouni <mohamed@unpredictable.fr>
+Reviewed-by: Philippe Mathieu-Daud=C3=A9 <philmd@linaro.org>
+---
+ hw/vmapple/vmapple.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/hw/vmapple/vmapple.c b/hw/vmapple/vmapple.c
+index b1379eafef..48d1ebc7d1 100644
+--- a/hw/vmapple/vmapple.c
++++ b/hw/vmapple/vmapple.c
+@@ -32,6 +32,7 @@
+ #include "hw/core/sysbus.h"
+ #include "hw/usb/usb.h"
+ #include "hw/arm/boot.h"
++#include "hw/arm/machines-qom.h"
+ #include "hw/arm/primecell.h"
+ #include "hw/char/pl011.h"
+ #include "hw/intc/arm_gic.h"
+@@ -610,6 +611,7 @@ static const TypeInfo vmapple_machine_info =3D {
+     .instance_size =3D sizeof(VMAppleMachineState),
+     .class_init    =3D vmapple_machine_class_init,
+     .instance_init =3D vmapple_instance_init,
++    .interfaces    =3D aarch64_machine_interfaces
+ };
+=20
+ static void machvmapple_machine_init(void)
+--=20
+2.50.1 (Apple Git-155)
+From nobody Sun Jun 21 11:11:12 2026
+Delivered-To: importer@patchew.org
+Authentication-Results: mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass(p=reject dis=none)  header.from=unpredictable.fr
+ARC-Seal: i=1; a=rsa-sha256; t=1774385449; cv=none;
+	d=zohomail.com; s=zohoarc;
+	b=mPrAwzIKOFPWABtf084KuErSqzJ0qRBLzrQrlMT6sG2NsO3hdt52phHn94KAbB5/McJJVW/8tt+oNwlA9Qffv83j9BCX0oxxiP7pkRgcNnAIOVvUovLglMf+g5zu04AfFyokkwEttq4KCHC4XsfXkA5L3NkqhqCE6LdNqxQMGmI=
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=zohomail.com;
+ s=zohoarc;
+	t=1774385449;
+ h=Content-Transfer-Encoding:Cc:Cc:Date:Date:From:From:In-Reply-To:List-Subscribe:List-Post:List-Id:List-Archive:List-Help:List-Unsubscribe:MIME-Version:Message-ID:References:Sender:Subject:Subject:To:To:Message-Id:Reply-To;
+	bh=uL7SH/8eLEnNDGttJV810T7r+i9fS8o6dskAKag2GG4=;
+	b=cmC8QmPLvb/BKjC9dj9mB6qlwjFlT8ZjEWdyvEJSxbBUMIxNxugv1oCqM73wk3s01JTuwQX18ImD6pC8QKnZtwsGSemUhFruro3XoICxpFKPkukNDAXKBKWn/zRM+hgk+gD/nTg7ALa3AAjM0jeRCfdMcIcYz1dOpeJ43uje/f8=
+ARC-Authentication-Results: i=1; mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass header.from=<mohamed@unpredictable.fr> (p=reject dis=none)
+Return-Path: <qemu-devel-bounces+importer=patchew.org@nongnu.org>
+Received: from lists.gnu.org (lists.gnu.org [209.51.188.17]) by
+ mx.zohomail.com
+	with SMTPS id 1774385448768120.75872946022525;
+ Tue, 24 Mar 2026 13:50:48 -0700 (PDT)
+Received: from localhost ([::1] helo=lists1p.gnu.org)
+	by lists.gnu.org with esmtp (Exim 4.90_1)
+	(envelope-from <qemu-devel-bounces@nongnu.org>)
+	id 1w58h9-0000wn-6g; Tue, 24 Mar 2026 16:49:47 -0400
+Received: from eggs.gnu.org ([2001:470:142:3::10])
+ by lists.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58h2-0000up-GQ
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:41 -0400
+Received: from p-west2-cluster2-host11-snip4-10.eps.apple.com ([57.103.68.213]
+ helo=outbound.mr.icloud.com)
+ by eggs.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58gz-0004fH-PM
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:40 -0400
+Received: from outbound.mr.icloud.com (unknown [127.0.0.2])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPS id
+ E61AC180047F; Tue, 24 Mar 2026 20:49:31 +0000 (UTC)
+Received: from localhost.localdomain (unknown [17.57.152.38])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPSA id
+ DEED11800444; Tue, 24 Mar 2026 20:49:27 +0000 (UTC)
+Dkim-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=unpredictable.fr;
+ s=sig1; t=1774385373; x=1776977373;
+ bh=uL7SH/8eLEnNDGttJV810T7r+i9fS8o6dskAKag2GG4=;
+ h=From:To:Subject:Date:Message-ID:MIME-Version:x-icloud-hme;
+ b=L2z0tQA50ZdzHoKykMWqunehkx5K21cXHlD3LZJZZhlIRvFSQE0NztBFSk+BpcZOep+E3YYMvkRJPS2qWc0l90jaWNdxZdM7F1K9Cr9rS2pUsh33tVyiUmULrFYFiWvCQhnA8D+RaCkdvPU+XWzVBZO071SHI6ZtZGR0tO8bJ+jttsHPuCUX0jC3Ijhx+dCPcpwapXzzE5IPBi3KQcEbDAvURGTfj7YNKncqil7+FLB9DTYmC13TY08FxeyVqbglmrgVHDEb6+86Mewo5/U2qV7ePZiZi/utnjEDAoXtCCnhc0ii4XSE/gPj6oCVHYzPwQcI+R0RNjB16u+IsAPEDA==
+mail-alias-created-date: 1752046281608
+From: Mohamed Mediouni <mohamed@unpredictable.fr>
+To: qemu-devel@nongnu.org
+Cc: Akihiko Odaki <odaki@rsg.ci.i.u-tokyo.ac.jp>, qemu-arm@nongnu.org,
+ Peter Maydell <peter.maydell@linaro.org>,
+ =?UTF-8?q?Philippe=20Mathieu-Daud=C3=A9?= <philmd@linaro.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ Phil Dennis-Jordan <phil@philjordan.eu>, Peter Xu <peterx@redhat.com>,
+ Mads Ynddal <mads@ynddal.dk>, Roman Bolshakov <rbolshakov@ddn.com>,
+ Alexander Graf <agraf@csgraf.de>,
+ Mohamed Mediouni <mohamed@unpredictable.fr>
+Subject: [RFC PATCH v7 4/7] Revert "hw/arm: Do not build VMapple machine by
+ default"
+Date: Tue, 24 Mar 2026 21:48:52 +0100
+Message-ID: <20260324204855.29759-5-mohamed@unpredictable.fr>
+X-Mailer: git-send-email 2.50.1
+In-Reply-To: <20260324204855.29759-1-mohamed@unpredictable.fr>
+References: <20260324204855.29759-1-mohamed@unpredictable.fr>
+MIME-Version: 1.0
+Content-Transfer-Encoding: quoted-printable
+X-Authority-Info-Out: v=2.4 cv=ErvfbCcA c=1 sm=1 tr=0 ts=69c2f8dd
+ cx=c_apl:c_pps:t_out a=9OgfyREA4BUYbbCgc0Y0oA==:117
+ a=9OgfyREA4BUYbbCgc0Y0oA==:17 a=Yq5XynenixoA:10 a=VkNPw1HP01LnGYTKEx00:22
+ a=XkhoILwbEVSdr8iLt8MA:9
+X-Proofpoint-ORIG-GUID: iDfwkeRT30hhf_CtBJBZviDiAmBA3NND
+X-Proofpoint-GUID: iDfwkeRT30hhf_CtBJBZviDiAmBA3NND
+X-Proofpoint-Spam-Details-Enc: AW1haW4tMjYwMzI0MDE2MSBTYWx0ZWRfX2sOCL3z9f+Se
+ 1+vhnDLoE88aDPo6kEfzJ/1rb/VV6YVwFLmOGmR+CI46j6PDRqkkmvkybVWCeW1ZjpiYGCNaGo6
+ 9EvYaiZEb5f/JnaGXCwnPCjUz4YRdbpw0jb24O96fVXSVdkr0dSc8PkVLLPMBq49RwYvMaFPTkE
+ 8CWT+Abg9rUPz7YahuqjY8hf4ENqzWko6BtUGZ5Kqi0tymhxvATHxYAsMVC9SuI30lvtX7Bd4Yx
+ a6UOMI3QVyRqcW8vLp74ZuT/555Gtyqss2iWIDZI9ntbCTiMT3kyExbZDwS7qgGf2qxBnbU0cHn
+ l8C4YKBJntgovwiITdtdstrf+x6qRhG1mcV3pwYxP2aJ/o0+gq3fVHb2xnPbwE=
+X-Proofpoint-Virus-Version: vendor=baseguard
+ engine=ICAP:2.0.293,Aquarius:18.0.1143,Hydra:6.1.51,FMLib:17.12.100.49
+ definitions=2026-03-24_03,2026-03-24_01,2025-10-01_01
+X-Proofpoint-Spam-Details: rule=notspam policy=default score=0 adultscore=0
+ mlxscore=0 lowpriorityscore=0 clxscore=1030 spamscore=0 suspectscore=0
+ bulkscore=0 phishscore=0 malwarescore=0 mlxlogscore=772 classifier=spam
+ authscore=0 adjust=0 reason=mlx scancount=1 engine=8.22.0-2601150000
+ definitions=main-2603240161
+Received-SPF: pass (zohomail.com: domain of gnu.org designates 209.51.188.17
+ as permitted sender) client-ip=209.51.188.17;
+ envelope-from=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+ helo=lists.gnu.org;
+Received-SPF: pass client-ip=57.103.68.213;
+ envelope-from=mohamed@unpredictable.fr; helo=outbound.mr.icloud.com
+X-Spam_score_int: -27
+X-Spam_score: -2.8
+X-Spam_bar: --
+X-Spam_report: (-2.8 / 5.0 requ) BAYES_00=-1.9, DKIM_SIGNED=0.1,
+ DKIM_VALID=-0.1, DKIM_VALID_AU=-0.1, DKIM_VALID_EF=-0.1,
+ RCVD_IN_DNSWL_LOW=-0.7, RCVD_IN_MSPIKE_H3=0.001, RCVD_IN_MSPIKE_WL=0.001,
+ RCVD_IN_VALIDITY_CERTIFIED_BLOCKED=0.001,
+ RCVD_IN_VALIDITY_RPBL_BLOCKED=0.001,
+ SPF_HELO_PASS=-0.001,
+ SPF_PASS=-0.001 autolearn=unavailable autolearn_force=no
+X-Spam_action: no action
+X-BeenThere: qemu-devel@nongnu.org
+X-Mailman-Version: 2.1.29
+Precedence: list
+List-Id: qemu development <qemu-devel.nongnu.org>
+List-Unsubscribe: <https://lists.nongnu.org/mailman/options/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=unsubscribe>
+List-Archive: <https://lists.nongnu.org/archive/html/qemu-devel>
+List-Post: <mailto:qemu-devel@nongnu.org>
+List-Help: <mailto:qemu-devel-request@nongnu.org?subject=help>
+List-Subscribe: <https://lists.nongnu.org/mailman/listinfo/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=subscribe>
+Errors-To: qemu-devel-bounces+importer=patchew.org@nongnu.org
+Sender: qemu-devel-bounces+importer=patchew.org@nongnu.org
+X-ZohoMail-DKIM: pass (identity @unpredictable.fr)
+X-ZM-MESSAGEID: 1774385452801158500
+Content-Type: text/plain; charset="utf-8"
+
+The vmapple virtual machine is now functional on newer macOS host releases.
+Revert commit 49551752e860f5e403cdacac11ee1d218141fd3d.
+
+Signed-off-by: Mohamed Mediouni <mohamed@unpredictable.fr>
+---
+ configs/devices/aarch64-softmmu/default.mak | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/configs/devices/aarch64-softmmu/default.mak b/configs/devices/=
+aarch64-softmmu/default.mak
+index ad8028cfd4..93f4022ad6 100644
+--- a/configs/devices/aarch64-softmmu/default.mak
++++ b/configs/devices/aarch64-softmmu/default.mak
+@@ -9,4 +9,3 @@ include ../arm-softmmu/default.mak
+ # CONFIG_XLNX_VERSAL=3Dn
+ # CONFIG_SBSA_REF=3Dn
+ # CONFIG_NPCM8XX=3Dn
+-CONFIG_VMAPPLE=3Dn
+--=20
+2.50.1 (Apple Git-155)
+From nobody Sun Jun 21 11:11:12 2026
+Delivered-To: importer@patchew.org
+Authentication-Results: mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass(p=reject dis=none)  header.from=unpredictable.fr
+ARC-Seal: i=1; a=rsa-sha256; t=1774385425; cv=none;
+	d=zohomail.com; s=zohoarc;
+	b=lL9ZGjLOwyWIaeQpJNI5hHn8lYDm2MC5qwUv7rPBxWzCA9vrEvGn5moax01XKCis1rEH0naOdRdhRlYqXPXaMrp/Yg1Z8Ojd8NOpSIMpBQUVxHeWTebzE5eWNtyqdOsl55z6iH6BLUPJA9ClnWv9yw73ytFfmvnpwRt3PNFMUvw=
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=zohomail.com;
+ s=zohoarc;
+	t=1774385425;
+ h=Content-Transfer-Encoding:Cc:Cc:Date:Date:From:From:In-Reply-To:List-Subscribe:List-Post:List-Id:List-Archive:List-Help:List-Unsubscribe:MIME-Version:Message-ID:References:Sender:Subject:Subject:To:To:Message-Id:Reply-To;
+	bh=Slu9+iHyMdVhlhZuw5M4rGv9gIxHstRiINTWvh1+tLk=;
+	b=N2k6VCucwCF/wDlFMMvwHUzGnTUvNWbD86Nk0UOVa3kEf3t+qm3f7JpSuHOof0b4tMw1sR37X9vGCZsM3cZT1VDBu9DIe2mfx2jyPXrBRavY7vo3h4cBXlFGixudsypFEqtpbrpRYzOyQijEWopSqFsiaV6pHT3Kow2pumY8VuY=
+ARC-Authentication-Results: i=1; mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass header.from=<mohamed@unpredictable.fr> (p=reject dis=none)
+Return-Path: <qemu-devel-bounces+importer=patchew.org@nongnu.org>
+Received: from lists.gnu.org (lists.gnu.org [209.51.188.17]) by
+ mx.zohomail.com
+	with SMTPS id 1774385425274504.8062876097482;
+ Tue, 24 Mar 2026 13:50:25 -0700 (PDT)
+Received: from localhost ([::1] helo=lists1p.gnu.org)
+	by lists.gnu.org with esmtp (Exim 4.90_1)
+	(envelope-from <qemu-devel-bounces@nongnu.org>)
+	id 1w58h9-0000wv-A9; Tue, 24 Mar 2026 16:49:47 -0400
+Received: from eggs.gnu.org ([2001:470:142:3::10])
+ by lists.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58h2-0000uq-Ik
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:41 -0400
+Received: from p-west2-cluster2-host4-snip4-1.eps.apple.com ([57.103.68.154]
+ helo=outbound.mr.icloud.com)
+ by eggs.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58gz-0004fs-Ok
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:40 -0400
+Received: from outbound.mr.icloud.com (unknown [127.0.0.2])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPS id
+ 76D4C180046D; Tue, 24 Mar 2026 20:49:35 +0000 (UTC)
+Received: from localhost.localdomain (unknown [17.57.152.38])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPSA id
+ 124C51800488; Tue, 24 Mar 2026 20:49:31 +0000 (UTC)
+Dkim-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=unpredictable.fr;
+ s=sig1; t=1774385376; x=1776977376;
+ bh=Slu9+iHyMdVhlhZuw5M4rGv9gIxHstRiINTWvh1+tLk=;
+ h=From:To:Subject:Date:Message-ID:MIME-Version:x-icloud-hme;
+ b=g0rUetWkfuPh+krfQ0OntROUfPH+BBntQ53f0G1JqJbyVfJTqDKUyhekMVjNS5urMcvQz7Raf+aaWkAgMhVq3Cf+Koa2l5K3CFDSZBxKVeSOJ9vaB/UfGyTwZCFWoaWD9FsM+J2CthUJP1t/ihNoAS/S+HZzsysRFksYmwG1r59O6q1tOb7WI4Pu0VUtX4thOpT5bNX4gtIu1RLgjHHhhXLFq29MIv+R4TKMeQZFwCroHmRhEb55PYVg/4D5a39w1CXW+BQNF+sAAFXI60FUnE7LrYPs5T2NQAgrmK4zMGr5m4HNs8MqDqLgB6b3XFb7tLp0FHjkxzOfxiaKVYfS5A==
+mail-alias-created-date: 1752046281608
+From: Mohamed Mediouni <mohamed@unpredictable.fr>
+To: qemu-devel@nongnu.org
+Cc: Akihiko Odaki <odaki@rsg.ci.i.u-tokyo.ac.jp>, qemu-arm@nongnu.org,
+ Peter Maydell <peter.maydell@linaro.org>,
+ =?UTF-8?q?Philippe=20Mathieu-Daud=C3=A9?= <philmd@linaro.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ Phil Dennis-Jordan <phil@philjordan.eu>, Peter Xu <peterx@redhat.com>,
+ Mads Ynddal <mads@ynddal.dk>, Roman Bolshakov <rbolshakov@ddn.com>,
+ Alexander Graf <agraf@csgraf.de>,
+ Mohamed Mediouni <mohamed@unpredictable.fr>
+Subject: [RFC PATCH v7 5/7] vmapple: add gicv2m
+Date: Tue, 24 Mar 2026 21:48:53 +0100
+Message-ID: <20260324204855.29759-6-mohamed@unpredictable.fr>
+X-Mailer: git-send-email 2.50.1
+In-Reply-To: <20260324204855.29759-1-mohamed@unpredictable.fr>
+References: <20260324204855.29759-1-mohamed@unpredictable.fr>
+MIME-Version: 1.0
+Content-Transfer-Encoding: quoted-printable
+X-Proofpoint-Spam-Details-Enc: AW1haW4tMjYwMzI0MDE2MSBTYWx0ZWRfX1gPOuHeGFlRV
+ U5YShwoep0alvLF1P9dl5hTva3dJ6x38NdT4AgfFjrijWwKPtXXKxVbEBnr4wMU6UKjWdsTFPXP
+ AcjWKPfeb/3DPDoN/xq243MNxOux4rXQV0HSh6AR2lE0zDYDdh78qM6UcjIUyxB1n/x1LGeWVZ/
+ z7lCtiaVZu0Y8eOJPTHIOZtZFhZm+/qENZoUdAAdMU09n2ToFSzeCib740oXhXshx/ZLqD+gqX4
+ xQ7ZUVHSBUIhLG3LF4Zdo/4Z9aIKoN9BjBm9c4RCCvqW1DdLa3UqiRSaMMgL/hxhmSD+vMVwBIN
+ 022CU/H/ryLWbpc9RKIq/xUL7vNdqMK4AB+9OOe/t7t3mqz7lLnJLvdWU4vsWU=
+X-Authority-Info-Out: v=2.4 cv=cZXfb3DM c=1 sm=1 tr=0 ts=69c2f8df
+ cx=c_apl:c_pps:t_out a=9OgfyREA4BUYbbCgc0Y0oA==:117
+ a=9OgfyREA4BUYbbCgc0Y0oA==:17 a=Yq5XynenixoA:10 a=VkNPw1HP01LnGYTKEx00:22
+ a=sAlVIecbGMDsLuTEZI0A:9
+X-Proofpoint-ORIG-GUID: QDDtq6uyBio8YFPQ3s-IXTYtZmWlvc4p
+X-Proofpoint-GUID: QDDtq6uyBio8YFPQ3s-IXTYtZmWlvc4p
+X-Proofpoint-Virus-Version: vendor=baseguard
+ engine=ICAP:2.0.293,Aquarius:18.0.1143,Hydra:6.1.51,FMLib:17.12.100.49
+ definitions=2026-03-24_03,2026-03-24_01,2025-10-01_01
+X-Proofpoint-Spam-Details: rule=notspam policy=default score=0 bulkscore=0
+ mlxlogscore=818 lowpriorityscore=0 clxscore=1030 spamscore=0 suspectscore=0
+ malwarescore=0 adultscore=0 mlxscore=0 phishscore=0 classifier=spam
+ authscore=0 adjust=0 reason=mlx scancount=1 engine=8.22.0-2601150000
+ definitions=main-2603240161
+Received-SPF: pass (zohomail.com: domain of gnu.org designates 209.51.188.17
+ as permitted sender) client-ip=209.51.188.17;
+ envelope-from=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+ helo=lists.gnu.org;
+Received-SPF: pass client-ip=57.103.68.154;
+ envelope-from=mohamed@unpredictable.fr; helo=outbound.mr.icloud.com
+X-Spam_score_int: -27
+X-Spam_score: -2.8
+X-Spam_bar: --
+X-Spam_report: (-2.8 / 5.0 requ) BAYES_00=-1.9, DKIM_SIGNED=0.1,
+ DKIM_VALID=-0.1, DKIM_VALID_AU=-0.1, DKIM_VALID_EF=-0.1,
+ RCVD_IN_DNSWL_LOW=-0.7, RCVD_IN_VALIDITY_CERTIFIED_BLOCKED=0.001,
+ RCVD_IN_VALIDITY_RPBL_BLOCKED=0.001, SPF_HELO_PASS=-0.001,
+ SPF_PASS=-0.001 autolearn=ham autolearn_force=no
+X-Spam_action: no action
+X-BeenThere: qemu-devel@nongnu.org
+X-Mailman-Version: 2.1.29
+Precedence: list
+List-Id: qemu development <qemu-devel.nongnu.org>
+List-Unsubscribe: <https://lists.nongnu.org/mailman/options/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=unsubscribe>
+List-Archive: <https://lists.nongnu.org/archive/html/qemu-devel>
+List-Post: <mailto:qemu-devel@nongnu.org>
+List-Help: <mailto:qemu-devel-request@nongnu.org?subject=help>
+List-Subscribe: <https://lists.nongnu.org/mailman/listinfo/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=subscribe>
+Errors-To: qemu-devel-bounces+importer=patchew.org@nongnu.org
+Sender: qemu-devel-bounces+importer=patchew.org@nongnu.org
+X-ZohoMail-DKIM: pass (identity @unpredictable.fr)
+X-ZM-MESSAGEID: 1774385427264154100
+Content-Type: text/plain; charset="utf-8"
+
+Signed-off-by: Mohamed Mediouni <mohamed@unpredictable.fr>
+---
+ hw/vmapple/vmapple.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/hw/vmapple/vmapple.c b/hw/vmapple/vmapple.c
+index 48d1ebc7d1..f2a6fda2e5 100644
+--- a/hw/vmapple/vmapple.c
++++ b/hw/vmapple/vmapple.c
+@@ -84,6 +84,7 @@ enum {
+     VMAPPLE_MEM,
+     VMAPPLE_GIC_DIST,
+     VMAPPLE_GIC_REDIST,
++    VMAPPLE_GICV2M,
+     VMAPPLE_UART,
+     VMAPPLE_RTC,
+     VMAPPLE_PCIE,
+@@ -105,6 +106,7 @@ static const MemMapEntry memmap[] =3D {
+=20
+     [VMAPPLE_GIC_DIST] =3D           { 0x10000000, 0x00010000 },
+     [VMAPPLE_GIC_REDIST] =3D         { 0x10010000, 0x00400000 },
++    [VMAPPLE_GICV2M] =3D             { 0x1FFF0000, 0x00010000 },
+=20
+     [VMAPPLE_UART] =3D               { 0x20010000, 0x00010000 },
+     [VMAPPLE_RTC] =3D                { 0x20050000, 0x00001000 },
+@@ -130,6 +132,7 @@ static const int irqmap[] =3D {
+     [VMAPPLE_APV_GFX] =3D 0x11,
+     [VMAPPLE_AES_1] =3D 0x12,
+     [VMAPPLE_PCIE] =3D 0x20,
++    [VMAPPLE_GICV2M] =3D 0x80
+ };
+=20
+ #define GPEX_NUM_IRQS 16
+@@ -287,6 +290,26 @@ static void create_gic(VMAppleMachineState *vms, Memor=
+yRegion *mem)
+     }
+ }
+=20
++#define NUM_GICV2M_SPIS       128
++
++static void create_gicv2m(VMAppleMachineState *vms)
++{
++    int i;
++    int irq =3D vms->irqmap[VMAPPLE_GICV2M];
++    DeviceState *dev;
++
++    dev =3D qdev_new("arm-gicv2m");
++    qdev_prop_set_uint32(dev, "base-spi", irq);
++    qdev_prop_set_uint32(dev, "num-spi", NUM_GICV2M_SPIS);
++    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
++    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, vms->memmap[VMAPPLE_GICV2M].ba=
+se);
++
++    for (i =3D 0; i < NUM_GICV2M_SPIS; i++) {
++        sysbus_connect_irq(SYS_BUS_DEVICE(dev), i,
++                           qdev_get_gpio_in(vms->gic, irq + i));
++    }
++}
++
+ static void create_uart(const VMAppleMachineState *vms, int uart,
+                         MemoryRegion *mem, Chardev *chr)
+ {
+@@ -497,6 +520,7 @@ static void mach_vmapple_init(MachineState *machine)
+                                 machine->ram);
+=20
+     create_gic(vms, sysmem);
++    create_gicv2m(vms);
+     create_bdif(vms, sysmem);
+     create_pvpanic(vms, sysmem);
+     create_aes(vms, sysmem);
+--=20
+2.50.1 (Apple Git-155)
+From nobody Sun Jun 21 11:11:12 2026
+Delivered-To: importer@patchew.org
+Authentication-Results: mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass(p=reject dis=none)  header.from=unpredictable.fr
+ARC-Seal: i=1; a=rsa-sha256; t=1774385422; cv=none;
+	d=zohomail.com; s=zohoarc;
+	b=llivZg/T1iUy0ckSKSo3eltCrWZuhzcxT8eLWo56vmtG/jQtjymSfg89XsscE2ShWbBYfdDQ2+/Lh/ZDNdZHzE5ST8ztxWDDdn5zljwMAjAAGjnBoCauvrHt02SNMa6i6ftV29zBI8mopnjy0Ti0P0BCeKfb7wX1jFTD9S8rKEk=
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=zohomail.com;
+ s=zohoarc;
+	t=1774385422;
+ h=Content-Transfer-Encoding:Cc:Cc:Date:Date:From:From:In-Reply-To:List-Subscribe:List-Post:List-Id:List-Archive:List-Help:List-Unsubscribe:MIME-Version:Message-ID:References:Sender:Subject:Subject:To:To:Message-Id:Reply-To;
+	bh=QB3B8N7SFrVJgVcgwhULIchHgcpWoIrdxwvNpW8E5hE=;
+	b=asEDNMfZHkKdiuf1c0DI6jlgFXiFwmfha6DLFiYMeRd4wLZmw5DM9poV4GHvH1QlzwEhMz98MOcHYe+gaXTCFmlHabRoFYPVC0D4n8+v6UQYSNLCR3OnPoWZy9Mnj8/ypcmH2IWSRZka5s+PM5//jDDlDAXtxFZUenHGb1sIgdU=
+ARC-Authentication-Results: i=1; mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass header.from=<mohamed@unpredictable.fr> (p=reject dis=none)
+Return-Path: <qemu-devel-bounces+importer=patchew.org@nongnu.org>
+Received: from lists.gnu.org (lists.gnu.org [209.51.188.17]) by
+ mx.zohomail.com
+	with SMTPS id 1774385422976867.9582585062187;
+ Tue, 24 Mar 2026 13:50:22 -0700 (PDT)
+Received: from localhost ([::1] helo=lists1p.gnu.org)
+	by lists.gnu.org with esmtp (Exim 4.90_1)
+	(envelope-from <qemu-devel-bounces@nongnu.org>)
+	id 1w58hB-00015N-CA; Tue, 24 Mar 2026 16:49:49 -0400
+Received: from eggs.gnu.org ([2001:470:142:3::10])
+ by lists.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58h8-0000wi-Vw
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:47 -0400
+Received: from p-west2-cluster2-host5-snip4-8.eps.apple.com ([57.103.68.231]
+ helo=outbound.mr.icloud.com)
+ by eggs.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58h7-0004ho-GL
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:46 -0400
+Received: from outbound.mr.icloud.com (unknown [127.0.0.2])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPS id
+ 93D421800462; Tue, 24 Mar 2026 20:49:40 +0000 (UTC)
+Received: from localhost.localdomain (unknown [17.57.152.38])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPSA id
+ D30C61800472; Tue, 24 Mar 2026 20:49:35 +0000 (UTC)
+Dkim-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=unpredictable.fr;
+ s=sig1; t=1774385384; x=1776977384;
+ bh=QB3B8N7SFrVJgVcgwhULIchHgcpWoIrdxwvNpW8E5hE=;
+ h=From:To:Subject:Date:Message-ID:MIME-Version:x-icloud-hme;
+ b=HdkqfjpoJOhfaMK5asqn5ZzDzt6Rhp0s7Sg/kKZTx59IIQESxiFDHyKEkbYXBTHNTZILqkRn3l9fUr8P+Lh9uKf9zkOo2BFZ7DxVUol1Iubc+EV2E0Gs5I0K7TnxaTctoDga3OxYGMBZFvOvH9Y56OR4dWE0vbE3/EkxZ8Rr6ACLtbTAHMi1MDv/bmk9QmH2gFJdKi2VRplIEmspdtuCy67K0PhKwfUCWIFjQGg4xyE5x6cOJ3gKmehuBeHjjCvDpBVDZbrBSvLBdvWu8eFsRGb5SHWHBrfNaIBTztyQyQK+W0X15WSO45KiafBLn08FXTdzkzbFJu+UvHmxhAVrUA==
+mail-alias-created-date: 1752046281608
+From: Mohamed Mediouni <mohamed@unpredictable.fr>
+To: qemu-devel@nongnu.org
+Cc: Akihiko Odaki <odaki@rsg.ci.i.u-tokyo.ac.jp>, qemu-arm@nongnu.org,
+ Peter Maydell <peter.maydell@linaro.org>,
+ =?UTF-8?q?Philippe=20Mathieu-Daud=C3=A9?= <philmd@linaro.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ Phil Dennis-Jordan <phil@philjordan.eu>, Peter Xu <peterx@redhat.com>,
+ Mads Ynddal <mads@ynddal.dk>, Roman Bolshakov <rbolshakov@ddn.com>,
+ Alexander Graf <agraf@csgraf.de>,
+ Mohamed Mediouni <mohamed@unpredictable.fr>
+Subject: [RFC PATCH v7 6/7] vmapple, gicv2m: add macOS compat quirk
+Date: Tue, 24 Mar 2026 21:48:54 +0100
+Message-ID: <20260324204855.29759-7-mohamed@unpredictable.fr>
+X-Mailer: git-send-email 2.50.1
+In-Reply-To: <20260324204855.29759-1-mohamed@unpredictable.fr>
+References: <20260324204855.29759-1-mohamed@unpredictable.fr>
+MIME-Version: 1.0
+Content-Transfer-Encoding: quoted-printable
+X-Proofpoint-Spam-Details-Enc: AW1haW4tMjYwMzI0MDE2MSBTYWx0ZWRfX/OV3G5zIHjeZ
+ hazn5XBwuJbUkeDVNic4WIFH0/a0WYHYBDGZJxp4YG4sJqZ+frNHhsZUrauwg6T+cfMdP3CiMlV
+ LPjVU6sMnI3S5KdgY7Z2ttf8Ex6YB0BddQmRwa0wcyMM3gWR87eRP4y94upLN4FcmgLML7jQsnc
+ UIKUx79sE7rduembhg4R5qd2A//JR5BsjRNPT54FCiJLXEU9x5EZI3FIx4z2Ty1GScA2sveC/Gf
+ 3Go0Snuxldo5wNKsvSey0wKRi7nfmStcIc6EfTUGfAjsKh07HvaTi2RvV1GVrPOR2/jKn2lCwwg
+ lxcIj4GCAgKIFE25fWDKWFC0enCyvbyV8KAUg2kPmMOwhAfCkyRBDhwz0f6qig=
+X-Proofpoint-GUID: R4YtHuzrzNSTSpmdQH9hrvtV3DpQgUZJ
+X-Proofpoint-ORIG-GUID: R4YtHuzrzNSTSpmdQH9hrvtV3DpQgUZJ
+X-Authority-Info-Out: v=2.4 cv=J6qnLQnS c=1 sm=1 tr=0 ts=69c2f8e6
+ cx=c_apl:c_pps:t_out a=9OgfyREA4BUYbbCgc0Y0oA==:117
+ a=9OgfyREA4BUYbbCgc0Y0oA==:17 a=Yq5XynenixoA:10 a=VkNPw1HP01LnGYTKEx00:22
+ a=k7I_zsxD337gQve_B7IA:9
+X-Proofpoint-Virus-Version: vendor=baseguard
+ engine=ICAP:2.0.293,Aquarius:18.0.1143,Hydra:6.1.51,FMLib:17.12.100.49
+ definitions=2026-03-24_03,2026-03-24_01,2025-10-01_01
+X-Proofpoint-Spam-Details: rule=notspam policy=default score=0 adultscore=0
+ mlxlogscore=849 lowpriorityscore=0 suspectscore=0 malwarescore=0 bulkscore=0
+ spamscore=0 phishscore=0 mlxscore=0 clxscore=1030 classifier=spam authscore=0
+ adjust=0 reason=mlx scancount=1 engine=8.22.0-2601150000
+ definitions=main-2603240161
+Received-SPF: pass (zohomail.com: domain of gnu.org designates 209.51.188.17
+ as permitted sender) client-ip=209.51.188.17;
+ envelope-from=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+ helo=lists.gnu.org;
+Received-SPF: pass client-ip=57.103.68.231;
+ envelope-from=mohamed@unpredictable.fr; helo=outbound.mr.icloud.com
+X-Spam_score_int: -27
+X-Spam_score: -2.8
+X-Spam_bar: --
+X-Spam_report: (-2.8 / 5.0 requ) BAYES_00=-1.9, DKIM_SIGNED=0.1,
+ DKIM_VALID=-0.1, DKIM_VALID_AU=-0.1, DKIM_VALID_EF=-0.1,
+ RCVD_IN_DNSWL_LOW=-0.7, RCVD_IN_VALIDITY_CERTIFIED_BLOCKED=0.001,
+ RCVD_IN_VALIDITY_RPBL_BLOCKED=0.001, SPF_HELO_PASS=-0.001,
+ SPF_PASS=-0.001 autolearn=ham autolearn_force=no
+X-Spam_action: no action
+X-BeenThere: qemu-devel@nongnu.org
+X-Mailman-Version: 2.1.29
+Precedence: list
+List-Id: qemu development <qemu-devel.nongnu.org>
+List-Unsubscribe: <https://lists.nongnu.org/mailman/options/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=unsubscribe>
+List-Archive: <https://lists.nongnu.org/archive/html/qemu-devel>
+List-Post: <mailto:qemu-devel@nongnu.org>
+List-Help: <mailto:qemu-devel-request@nongnu.org?subject=help>
+List-Subscribe: <https://lists.nongnu.org/mailman/listinfo/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=subscribe>
+Errors-To: qemu-devel-bounces+importer=patchew.org@nongnu.org
+Sender: qemu-devel-bounces+importer=patchew.org@nongnu.org
+X-ZohoMail-DKIM: pass (identity @unpredictable.fr)
+X-ZM-MESSAGEID: 1774385426964154100
+Content-Type: text/plain; charset="utf-8"
+
+macOS expects bit 31 of MSI_TYPER to be set.
+
+Signed-off-by: Mohamed Mediouni <mohamed@unpredictable.fr>
+---
+ hw/intc/arm_gicv2m.c | 5 +++++
+ hw/vmapple/vmapple.c | 1 +
+ 2 files changed, 6 insertions(+)
+
+diff --git a/hw/intc/arm_gicv2m.c b/hw/intc/arm_gicv2m.c
+index b343e17ca5..ead1d9d079 100644
+--- a/hw/intc/arm_gicv2m.c
++++ b/hw/intc/arm_gicv2m.c
+@@ -57,6 +57,7 @@ struct ARMGICv2mState {
+=20
+     uint32_t base_spi;
+     uint32_t num_spi;
++    uint32_t macos_compat;
+ };
+=20
+ static void gicv2m_set_irq(void *opaque, int irq)
+@@ -81,6 +82,9 @@ static uint64_t gicv2m_read(void *opaque, hwaddr offset,
+     case V2M_MSI_TYPER:
+         val =3D (s->base_spi + 32) << 16;
+         val |=3D s->num_spi;
++        if (s->macos_compat) {
++            val |=3D BIT(31);
++        }
+         return val;
+     case V2M_MSI_IIDR:
+         /* We don't have any valid implementor so we leave that field as z=
+ero
+@@ -173,6 +177,7 @@ static void gicv2m_init(Object *obj)
+ static const Property gicv2m_properties[] =3D {
+     DEFINE_PROP_UINT32("base-spi", ARMGICv2mState, base_spi, 0),
+     DEFINE_PROP_UINT32("num-spi", ARMGICv2mState, num_spi, 64),
++    DEFINE_PROP_UINT32("macos-compat", ARMGICv2mState, macos_compat, 0),
+ };
+=20
+ static void gicv2m_class_init(ObjectClass *klass, const void *data)
+diff --git a/hw/vmapple/vmapple.c b/hw/vmapple/vmapple.c
+index f2a6fda2e5..e68b623c5b 100644
+--- a/hw/vmapple/vmapple.c
++++ b/hw/vmapple/vmapple.c
+@@ -301,6 +301,7 @@ static void create_gicv2m(VMAppleMachineState *vms)
+     dev =3D qdev_new("arm-gicv2m");
+     qdev_prop_set_uint32(dev, "base-spi", irq);
+     qdev_prop_set_uint32(dev, "num-spi", NUM_GICV2M_SPIS);
++    qdev_prop_set_uint32(dev, "macos-compat", 1);
+     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, vms->memmap[VMAPPLE_GICV2M].ba=
+se);
+=20
+--=20
+2.50.1 (Apple Git-155)
+From nobody Sun Jun 21 11:11:12 2026
+Delivered-To: importer@patchew.org
+Authentication-Results: mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass(p=reject dis=none)  header.from=unpredictable.fr
+ARC-Seal: i=1; a=rsa-sha256; t=1774385446; cv=none;
+	d=zohomail.com; s=zohoarc;
+	b=dxmUnZy3WKbILs72fv2zPXp0IlT38eJJ3XV+rFnfAVPeU35fr+GnxtYFDGpoL1mh2ee8Q2raUpUjmta3xSNMUQeLUcJ0ah/xxfoBh6elooCz4u/QZslX7pijZ3plPHA8zpupYKFHUHlZT4mwhzlh0Jx8LUaP01c0fO+gexVhkwY=
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=zohomail.com;
+ s=zohoarc;
+	t=1774385446;
+ h=Content-Transfer-Encoding:Cc:Cc:Date:Date:From:From:In-Reply-To:List-Subscribe:List-Post:List-Id:List-Archive:List-Help:List-Unsubscribe:MIME-Version:Message-ID:References:Sender:Subject:Subject:To:To:Message-Id:Reply-To;
+	bh=O6Kttnx9nqVllO63zwZbNg+Hw9L0+qrkNMfXO8Fz1Lw=;
+	b=gMITnVWA0GwG31ysyuQoOBPsMgH4GdwXC7vClebQ8vw9GY/qIzu7SZKrl+16VIgZZeBgHsedOzmuRxN8EYxf/+OJvEfpW4fNzHWtfyrWrXKQ2bmiuvRRg86U9gHdU/CGfmGgkh/xXIrZbvZAyB/SoQIgGUf23uimfCGG4WYaCIY=
+ARC-Authentication-Results: i=1; mx.zohomail.com;
+	dkim=pass;
+	spf=pass (zohomail.com: domain of gnu.org designates 209.51.188.17 as
+ permitted sender)
+  smtp.mailfrom=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+	dmarc=pass header.from=<mohamed@unpredictable.fr> (p=reject dis=none)
+Return-Path: <qemu-devel-bounces+importer=patchew.org@nongnu.org>
+Received: from lists.gnu.org (lists.gnu.org [209.51.188.17]) by
+ mx.zohomail.com
+	with SMTPS id 1774385446591105.48427816144863;
+ Tue, 24 Mar 2026 13:50:46 -0700 (PDT)
+Received: from localhost ([::1] helo=lists1p.gnu.org)
+	by lists.gnu.org with esmtp (Exim 4.90_1)
+	(envelope-from <qemu-devel-bounces@nongnu.org>)
+	id 1w58hC-0001CD-84; Tue, 24 Mar 2026 16:49:50 -0400
+Received: from eggs.gnu.org ([2001:470:142:3::10])
+ by lists.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58hA-000137-K0
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:48 -0400
+Received: from p-west2-cluster2-host8-snip4-9.eps.apple.com ([57.103.68.140]
+ helo=outbound.mr.icloud.com)
+ by eggs.gnu.org with esmtps (TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256)
+ (Exim 4.90_1) (envelope-from <mohamed@unpredictable.fr>)
+ id 1w58h9-0004hw-3K
+ for qemu-devel@nongnu.org; Tue, 24 Mar 2026 16:49:48 -0400
+Received: from outbound.mr.icloud.com (unknown [127.0.0.2])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPS id
+ 758AD180047E; Tue, 24 Mar 2026 20:49:44 +0000 (UTC)
+Received: from localhost.localdomain (unknown [17.57.152.38])
+ by p00-icloudmta-asmtp-us-west-2a-10-percent-0 (Postfix) with ESMTPSA id
+ 32DF6180017D; Tue, 24 Mar 2026 20:49:39 +0000 (UTC)
+Dkim-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=unpredictable.fr;
+ s=sig1; t=1774385386; x=1776977386;
+ bh=O6Kttnx9nqVllO63zwZbNg+Hw9L0+qrkNMfXO8Fz1Lw=;
+ h=From:To:Subject:Date:Message-ID:MIME-Version:x-icloud-hme;
+ b=DVZQViyt4ublsqNm5gJD828rzTYxSHs9lcp8XMe9+1THzBjAItc4SlW4074feQCS26QhOKoBVaQGtvRWUhWHn4KPCVR1/Ekr/424IyzrjFKLKCQmSj8q8BcKk7d4nemnEgvBn75CcPLcNMG3wC3uIS5Y21FQXYmQk1EpdJG4w4d3MjN8yxbsLXfkT7UCR1aJA1tLH8wUKSXTTM1WxmE8sxvuTX2d0kXEZgl/G+gE05it59N++xd3c7QxlFbRhvw/BG+vXEucb6mbDOIgJDTroU/OBWbXeQMcSt8A4i+fohe2XtvUAI+613m/fKMMBNIO7Mjerd3UCymWCS9ydmDV+A==
+mail-alias-created-date: 1752046281608
+From: Mohamed Mediouni <mohamed@unpredictable.fr>
+To: qemu-devel@nongnu.org
+Cc: Akihiko Odaki <odaki@rsg.ci.i.u-tokyo.ac.jp>, qemu-arm@nongnu.org,
+ Peter Maydell <peter.maydell@linaro.org>,
+ =?UTF-8?q?Philippe=20Mathieu-Daud=C3=A9?= <philmd@linaro.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ Phil Dennis-Jordan <phil@philjordan.eu>, Peter Xu <peterx@redhat.com>,
+ Mads Ynddal <mads@ynddal.dk>, Roman Bolshakov <rbolshakov@ddn.com>,
+ Alexander Graf <agraf@csgraf.de>,
+ Mohamed Mediouni <mohamed@unpredictable.fr>
+Subject: [RFC PATCH v7 7/7] hvf: do not merge: enable private ISA
+Date: Tue, 24 Mar 2026 21:48:55 +0100
+Message-ID: <20260324204855.29759-8-mohamed@unpredictable.fr>
+X-Mailer: git-send-email 2.50.1
+In-Reply-To: <20260324204855.29759-1-mohamed@unpredictable.fr>
+References: <20260324204855.29759-1-mohamed@unpredictable.fr>
+MIME-Version: 1.0
+Content-Transfer-Encoding: quoted-printable
+X-Proofpoint-Spam-Details-Enc: AW1haW4tMjYwMzI0MDE2MSBTYWx0ZWRfX7Dl+rUrgOvdE
+ rm8ihZg/XAEIXCoEPLqdwIfVRNMch5PWXwvXYRNodXsVLwlUL6hm+BIs97HNSFjWjpxyPisjPcF
+ R0JTPZmS6MML1UyP8VaoN/j195AA7Aj5jK3mOAYswzrU8bjZcMkwQPooi+V66QD8h5oqBbSxUFZ
+ HWxUbG2hyRx8GpgUHHDor34wRKrcGs+1ls0TwHwSvX1my4sqhhI0Nxzl72AH6AI7o/p27ZbRC1S
+ GVC8QOAtyq4nnGq9ACqrnZMoUFkawLVCs6C8PNoFjaLDcN9mB5KYBlafaord6j9K1WJ30nJhI28
+ gU/U4mwBvvjv//+FgeTUjAtKgiRKqYWxRueVtAPQGn1PNyx47mWD+o+pFtOCr8=
+X-Proofpoint-ORIG-GUID: wbgtyF_BgaubWpRo8r_EjYq0WAnXC9NH
+X-Authority-Info-Out: v=2.4 cv=TaybdBQh c=1 sm=1 tr=0 ts=69c2f8e9
+ cx=c_apl:c_pps:t_out a=9OgfyREA4BUYbbCgc0Y0oA==:117
+ a=9OgfyREA4BUYbbCgc0Y0oA==:17 a=Yq5XynenixoA:10 a=VkNPw1HP01LnGYTKEx00:22
+ a=-PnSl7ADAAAA:20 a=t-IPkPogAAAA:8 a=qAl5iOcGTlDWK1lW5BMA:9
+ a=bA3UWDv6hWIuX7UZL3qL:22
+X-Proofpoint-GUID: wbgtyF_BgaubWpRo8r_EjYq0WAnXC9NH
+X-Proofpoint-Virus-Version: vendor=baseguard
+ engine=ICAP:2.0.293,Aquarius:18.0.1143,Hydra:6.1.51,FMLib:17.12.100.49
+ definitions=2026-03-24_03,2026-03-24_01,2025-10-01_01
+X-Proofpoint-Spam-Details: rule=notspam policy=default score=0 mlxlogscore=768
+ mlxscore=0 spamscore=0 clxscore=1030 malwarescore=0
+ lowpriorityscore=0
+ adultscore=0 bulkscore=0 phishscore=0 suspectscore=0 classifier=spam
+ authscore=0 adjust=0 reason=mlx scancount=1 engine=8.22.0-2601150000
+ definitions=main-2603240161
+Received-SPF: pass (zohomail.com: domain of gnu.org designates 209.51.188.17
+ as permitted sender) client-ip=209.51.188.17;
+ envelope-from=qemu-devel-bounces+importer=patchew.org@nongnu.org;
+ helo=lists.gnu.org;
+Received-SPF: pass client-ip=57.103.68.140;
+ envelope-from=mohamed@unpredictable.fr; helo=outbound.mr.icloud.com
+X-Spam_score_int: -20
+X-Spam_score: -2.1
+X-Spam_bar: --
+X-Spam_report: (-2.1 / 5.0 requ) BAYES_00=-1.9, DKIM_SIGNED=0.1,
+ DKIM_VALID=-0.1, DKIM_VALID_AU=-0.1, DKIM_VALID_EF=-0.1,
+ RCVD_IN_VALIDITY_CERTIFIED_BLOCKED=0.001,
+ RCVD_IN_VALIDITY_RPBL_BLOCKED=0.001,
+ SPF_HELO_PASS=-0.001, SPF_PASS=-0.001 autolearn=ham autolearn_force=no
+X-Spam_action: no action
+X-BeenThere: qemu-devel@nongnu.org
+X-Mailman-Version: 2.1.29
+Precedence: list
+List-Id: qemu development <qemu-devel.nongnu.org>
+List-Unsubscribe: <https://lists.nongnu.org/mailman/options/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=unsubscribe>
+List-Archive: <https://lists.nongnu.org/archive/html/qemu-devel>
+List-Post: <mailto:qemu-devel@nongnu.org>
+List-Help: <mailto:qemu-devel-request@nongnu.org?subject=help>
+List-Subscribe: <https://lists.nongnu.org/mailman/listinfo/qemu-devel>,
+ <mailto:qemu-devel-request@nongnu.org?subject=subscribe>
+Errors-To: qemu-devel-bounces+importer=patchew.org@nongnu.org
+Sender: qemu-devel-bounces+importer=patchew.org@nongnu.org
+X-ZohoMail-DKIM: pass (identity @unpredictable.fr)
+X-ZM-MESSAGEID: 1774385448228154100
+Content-Type: text/plain; charset="utf-8"
+
+Booting macOS Tahoe.
+
+There in the series to show that's all it takes, but not
+mergable as is. Testing this requires SIP to be disabled
+and AMFI to be bypassed to be able to launch the executable.
+
+Note that macOS Tahoe uses ISV=3D0, and the corresponding series
+is needed too.
+
+The script to do so:
+https://gist.githubusercontent.com/zhaofengli/1df11ae3f0dd4e2c872a12ef849f7=
+371/raw/b0ef43f2168600e8810d35a3e70d9a1eb39929e2/amfid-allow.py
+
+Signed-off-by: Mohamed Mediouni <mohamed@unpredictable.fr>
+---
+ accel/hvf/entitlements.plist | 2 +-
+ target/arm/hvf/hvf.c         | 8 ++++++++
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/accel/hvf/entitlements.plist b/accel/hvf/entitlements.plist
+index 154f3308ef..b1a25a2319 100644
+--- a/accel/hvf/entitlements.plist
++++ b/accel/hvf/entitlements.plist
+@@ -2,7 +2,7 @@
+ <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com=
+/DTDs/PropertyList-1.0.dtd">
+ <plist version=3D"1.0">
+ <dict>
+-    <key>com.apple.security.hypervisor</key>
++    <key>com.apple.private.hypervisor</key>
+     <true/>
+ </dict>
+ </plist>
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+index 000e54bd16..5d23aa8ae4 100644
+--- a/target/arm/hvf/hvf.c
++++ b/target/arm/hvf/hvf.c
+@@ -1219,6 +1219,8 @@ void hvf_arch_vcpu_destroy(CPUState *cpu)
+     assert_hvf_ok(ret);
+ }
+=20
++hv_return_t _hv_vm_config_set_isa(hv_vm_config_t cfg, int isa);
++
+ hv_return_t hvf_arch_vm_create(MachineState *ms, uint32_t pa_range)
+ {
+     hv_return_t ret;
+@@ -1230,6 +1232,12 @@ hv_return_t hvf_arch_vm_create(MachineState *ms, uin=
+t32_t pa_range)
+     }
+     chosen_ipa_bit_size =3D pa_range;
+=20
++    ret =3D _hv_vm_config_set_isa(config, 3);
++    if (ret !=3D HV_SUCCESS) {
++        error_report("error setting private ISA");
++        goto cleanup;
++    }
++
+     ret =3D hv_vm_create(config);
+=20
+ cleanup:
+--=20
+2.50.1 (Apple Git-155)

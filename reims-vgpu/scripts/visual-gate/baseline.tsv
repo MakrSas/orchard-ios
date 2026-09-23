@@ -1,0 +1,20 @@
+# The budget each silent-loss class is allowed over one gate window.
+#
+# class<TAB>budget<TAB>the basis for that number
+#
+# Zero is the default and the only one that needs no argument. A non-zero
+# budget is an admission that this device loses something today, and it does
+# not belong here without a measurement and a reason. Never raise one to make a
+# run pass; raise it only when a boot of the *unmodified* tree exceeds it, and
+# say in the commit which boot.
+#
+# The plan that specified this gate asserted all six read zero. Two of them do
+# not, and the first full run on unmodified HEAD is what said so.
+deferred_flush_lost	4	Measured on unmodified 9e3969b, x86/PCI, host GPU P8: two consecutive full gate windows on one boot read 1 and 2, and the boot as a whole read 5 over about fifteen minutes. Every one of them is the paired consequence of a mapping_page_drift below and every one is a 24-pixel-tall strip — 1877x24 four times, 43x24 once, which at 1920 wide is the menu bar. 4 is double the worst window observed. It does not catch one extra dropped frame and nothing here claims it does; what it catches is a rail that has started dropping frames systematically, which reads in the hundreds rather than the units.
+mapping_page_drift	4	The same five events, same boot, one per dropped render. Four read reason=translation_moved (the guest re-pointed a surface with no packet saying so, and page 0 of the cached list disagreed with a fresh walk) and one reason=no_translation (the task could not translate that page at all). Refusing the write is the correct answer in both — landing at the stale GPAs would scatter a frame into guest memory the guest has since repurposed — so what is lost is that the frame is dropped rather than re-landed at the new translation. That is an open defect on the menu-bar strip, not a gate artifact, and it predates this gate.
+gw_audit_unsound	0	A standing alarm. Zero across the whole accumulated log to date; the gather witness refuting itself means a stale image is being served.
+render_flush_over_guest_write	0	A standing alarm. Documented as expected-never; the ordering repair in flush_mapping_windows_before_fence is what keeps it so. If it fires that repair has broken.
+tdc_overflow	0	Cannot fire unless REIMS_VGPU_PROBE_TILE_DIFF_CENSUS is set, and a gate run does not set it.
+present_action_starvation	0	Zero across the whole accumulated log to date. MAX_UNPAINTED_PRESENTS holding the guest at the FIFO head would be a real change in backpressure behaviour.
+render_unimplemented	0	A standing alarm, and the one a green run hides best. Zero across every archived boot of this rig — seventeen logs, x86/PCI/Vulkan, driven under the window-drag and web-content probes as well as idle. A firing names one render opcode the decoder accepted into `Kind::OtherAccepted` and no executor ran, so the draw completed and the guest was stamped for work this device did not do. The line carries the opcode, length and raw wire, so a firing identifies the missing arm rather than only reporting one.
+device_info_truncated	0	A standing alarm, and zero by construction on the guests measured here: the reply buffer is a whole page (512 pair slots) against a table of a few dozen keys, and every key still offered at that point is one the guest's own key-table length says it parses. A firing means a capability the guest cannot re-ask for is gone for the boot — it issues this command once, frees the buffer and answers every later reader from what it parsed.

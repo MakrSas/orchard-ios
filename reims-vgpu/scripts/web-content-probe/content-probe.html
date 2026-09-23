@@ -1,0 +1,312 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>reims content probe</title>
+<!--
+  Declares a page whose correct appearance is a fact the host can check.
+
+  Goal 8 is "web content is occasionally corrupted in Firefox and Safari —
+  background disappearing, subtle bugs, not all-white". A screenshot of a real
+  page cannot be checked against anything, because nothing says what it should
+  have looked like. So this page is built to say so: a fixed palette of widely
+  separated, fully opaque colours in known regions, and a POST back to the probe
+  server naming each region's rectangle and the colour it is supposed to be.
+
+  The host then measures those rectangles in its own capture. That makes the
+  comparison intent-versus-result rather than eyeball-versus-memory, which is
+  the same shape that made modal-button-probe able to answer anything.
+
+  Design constraints, each for a reason:
+
+  - The page goes fullscreen-sized and reports rectangles in *screen* pixels, so
+    the host never has to model browser chrome. It reads window.screenX/screenY
+    and the inner/outer difference rather than assuming a toolbar height.
+  - Colours are separated far enough that the host can classify a measured mean
+    to the nearest palette entry instead of applying a tolerance. WHITE and
+    BLACK are in the palette on purpose: "the background turned white" is then a
+    named verdict rather than a threshold miss.
+  - The background is a large region of one colour, because that is the thing
+    the bug report says disappears.
+  - Everything is a plain opaque div. No gradients, no blend modes, no
+    transforms: the point is to detect a compositing loss, not to exercise one
+    particular path into it. A patch that renders wrong here is wrong for a
+    reason that would be much harder to see in real content.
+-->
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; }
+  body { background: #202080; }
+  /* Fixed, not absolute: churn mode scrolls, and a declared region that moves
+     with the scroll would be reported as corruption by a probe that measures
+     it where it was declared. Fixed patches are the invariant the churn is
+     allowed to disturb everything around. */
+  .patch { position: fixed; }
+  /* Inset to the patch band, matching the page's own margins. The background
+     samples live in those margins and measure the body fill, so a churn child
+     landing on one would be read as the background having changed colour — a
+     false positive manufactured by the probe. Confined here, the churn instead
+     runs directly *behind* the declared patches, which is the more interesting
+     place for it. */
+  #churn {
+    position: fixed; inset: 18% 10%; overflow: auto; z-index: 0;
+    pointer-events: none; contain: strict;
+  }
+  .patch, #status { z-index: 5; }
+  /* Above the other churn children so a randomly placed one cannot cover it,
+     but still inside the churn container's stacking context and so still
+     below the patches. */
+  #witness { z-index: 1; }
+  #status {
+    position: absolute; left: 0; bottom: 0; font: 12px monospace;
+    color: #fff; background: #000; padding: 2px 6px; z-index: 10;
+  }
+</style>
+<body>
+<div id="status">probe starting…</div>
+<script>
+// Widely separated, fully opaque. WHITE and BLACK are palette members so a
+// region that loses its fill classifies as one of them by name.
+const PALETTE = {
+  BG:      [0x20, 0x20, 0x80],
+  RED:     [0xe0, 0x10, 0x10],
+  GREEN:   [0x10, 0xc0, 0x30],
+  YELLOW:  [0xf0, 0xe0, 0x10],
+  MAGENTA: [0xd0, 0x10, 0xd0],
+  CYAN:    [0x10, 0xd0, 0xe0],
+  ORANGE:  [0xf0, 0x80, 0x10],
+  // The churn witness. Separated from every other entry by at least as much as
+  // the closest existing pair (YELLOW/ORANGE), so it costs the classifier
+  // nothing to carry.
+  VIOLET:  [0x70, 0x10, 0xe0],
+  WHITE:   [0xff, 0xff, 0xff],
+  BLACK:   [0x00, 0x00, 0x00],
+};
+const NAMES = ['RED', 'GREEN', 'YELLOW', 'MAGENTA', 'CYAN', 'ORANGE'];
+const hex = c => '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+
+const COLS = 3, ROWS = 2;
+const regions = [];
+
+function build() {
+  // Re-declaring rebuilds the page, which takes the churn container with it —
+  // so it is put back here rather than only at startup. Without this the churn
+  // stops one second in and every later capture measures a static page while
+  // the run reports itself as churning.
+  document.body.innerHTML = '<div id="status"></div>';
+  const W = window.innerWidth, H = window.innerHeight;
+  // Patches occupy the middle band, leaving generous margins of background on
+  // every side. Those margins are what the background regions measure, and they
+  // have to be wide enough that a downscaled capture still samples only them.
+  const padX = Math.floor(W * 0.10), padY = Math.floor(H * 0.18);
+  const cw = Math.floor((W - 2 * padX) / COLS), ch = Math.floor((H - 2 * padY) / ROWS);
+  const gap = Math.floor(Math.min(cw, ch) * 0.12);
+  // Published before the churn container is built, because the witness inside
+  // it is positioned from this geometry.
+  grid = { padX, padY, cw, ch, gap };
+  buildChurn();
+  regions.length = 0;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const name = NAMES[r * COLS + c];
+      const d = document.createElement('div');
+      d.className = 'patch';
+      d.style.left = (padX + c * cw + gap) + 'px';
+      d.style.top = (padY + r * ch + gap) + 'px';
+      d.style.width = (cw - 2 * gap) + 'px';
+      d.style.height = (ch - 2 * gap) + 'px';
+      d.style.background = hex(PALETTE[name]);
+      d.dataset.name = name;
+      document.body.appendChild(d);
+    }
+  }
+  // Background samples: the four margins. Named BG_* so a failure says which
+  // part of the background went, which is what "shifted 10% to the left" would
+  // look like from here.
+  const m = Math.floor(Math.min(padX, padY) * 0.5);
+  const bg = [
+    ['BG_LEFT',   0,          Math.floor(H / 2) - m, m * 2, m * 2],
+    ['BG_RIGHT',  W - m * 2,  Math.floor(H / 2) - m, m * 2, m * 2],
+    ['BG_TOP',    Math.floor(W / 2) - m, 0,          m * 2, m * 2],
+    ['BG_BOTTOM', Math.floor(W / 2) - m, H - m * 2,  m * 2, m * 2],
+  ];
+
+  // Screen-space origin of the viewport, read rather than assumed: the host
+  // must not have to model this browser's chrome height.
+  //
+  // These four metrics do not update atomically. Measured during Safari's
+  // fullscreen transition, `innerWidth` had already become 1920 while
+  // `outerWidth` was still 1854, which put the origin at (-33, -184) and shifted
+  // every declared rectangle a whole grid row off the content. A declaration
+  // taken there is not a wrong reading of the screen, it is a reading of a
+  // window that no longer exists — so `declare()` refuses it rather than
+  // publishing it, and the next tick republishes once the metrics agree.
+  const ox = window.screenX + (window.outerWidth - window.innerWidth) / 2;
+  const oy = window.screenY + (window.outerHeight - window.innerHeight);
+  if (ox < 0 || oy < 0 ||
+      window.outerWidth < window.innerWidth ||
+      window.outerHeight < window.innerHeight ||
+      ox + W > screen.width || oy + H > screen.height) {
+    return null;
+  }
+  const out = [];
+  for (const d of document.querySelectorAll('.patch')) {
+    const r = d.getBoundingClientRect();
+    out.push({ name: d.dataset.name, expect: PALETTE[d.dataset.name],
+               x: Math.round(ox + r.left), y: Math.round(oy + r.top),
+               w: Math.round(r.width), h: Math.round(r.height) });
+  }
+  for (const [name, x, y, w, h] of bg) {
+    out.push({ name, expect: PALETTE.BG,
+               x: Math.round(ox + x), y: Math.round(oy + y), w, h });
+  }
+  const wit = document.getElementById('witness');
+  if (wit) {
+    const r = wit.getBoundingClientRect();
+    out.push({ name: 'CHURN_WITNESS', expect: PALETTE.VIOLET,
+               x: Math.round(ox + r.left), y: Math.round(oy + r.top),
+               w: Math.round(r.width), h: Math.round(r.height) });
+  }
+  return out;
+}
+
+function post(body) {
+  return fetch('/', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
+}
+
+const params = new URLSearchParams(location.search);
+// Repainting on a cadence is what gives the "occasional" bug chances to happen
+// while the host is capturing. The patches keep their colours; only a counter
+// changes, so every capture is checkable against the same declaration.
+const beatMs = Number(params.get('beat') || 250);
+
+// Churn: make the compositor build and tear down layers between captures.
+//
+// A static page measured 60 captures and 600 region checks clean, which says
+// the common case is sound and says nothing about the bug — "the background
+// disappears" is reported during real browsing, which is scrolling, layer
+// promotion and demotion, and elements arriving and leaving. So churn mode
+// reproduces that class of work *around* the declared regions while the
+// declared regions themselves are `position: fixed` and must not change. Any
+// mismatch is then a loss the churn caused, not content that moved.
+//
+// Declared above `declare()` because `build()` recreates the churn container
+// and `declare()` runs immediately: with `const churn` below, that first call
+// hits the temporal dead zone and the page dies before it declares anything.
+const churn = params.get('churn') !== '0';
+let churnBox = null;
+let grid = null;
+function buildChurn() {
+  if (!churn) return;
+  churnBox = document.createElement('div');
+  churnBox.id = 'churn';
+  document.body.insertBefore(churnBox, document.body.firstChild);
+  placeWitness();
+}
+
+// The churn's own witness, and the reason it exists is a run that reported
+// itself clean while the stressor produced nothing at all.
+//
+// The first churning run passed six captures with zero mismatches, and the
+// retained frames showed no churn children and no beat counter — the whole beat
+// timer's output was missing, so the run was six captures of a static page
+// wearing a churning run's label. Nothing in the verdict could say so, because
+// the churn is deliberately not among the checked regions: it moves, and a
+// moving region measured at a fixed rectangle is a false positive generator.
+//
+// So one churn child is made stationary and declared. It is created and
+// destroyed with the rest of them every beat, so it is a real churn child and
+// not a bystander; it sits at the crossing of the grid's centre gaps, where no
+// patch can occlude it; and its `top` compensates for the container's scroll so
+// its screen rectangle is the one `declare()` published. If the beat stops, the
+// witness stops being drawn and the checked region reads BG instead of VIOLET.
+//
+// A missing witness is therefore reported by the same channel as a missing
+// patch — which is why the host has to establish that the beat is *running*
+// before it believes any verdict. A wedged page and a dropped frame look
+// identical here, and only one of them is this device's fault.
+function placeWitness() {
+  if (!churnBox || !grid) return;
+  const { padX, padY, cw, ch, gap } = grid;
+  // The gap between column 0 and column 1 spans 2*gap horizontally; likewise
+  // between row 0 and row 1 vertically. Their crossing is patch-free by
+  // construction, whatever the viewport is.
+  const inset = 6, side = Math.max(8, 2 * gap - 2 * inset);
+  const vx = padX + cw - gap + inset, vy = padY + ch - gap + inset;
+  const box = churnBox.getBoundingClientRect();
+  const w = document.createElement('div');
+  w.id = 'witness';
+  w.style.position = 'absolute';
+  // Offsets are relative to the container's padding box, and its scroll
+  // position is added back so the witness holds still while the churn behind it
+  // scrolls.
+  w.style.left = (vx - box.left) + 'px';
+  w.style.top = (vy - box.top + churnBox.scrollTop) + 'px';
+  w.style.width = side + 'px';
+  w.style.height = side + 'px';
+  w.style.background = hex(PALETTE.VIOLET);
+  churnBox.appendChild(w);
+}
+
+// Republished on a timer rather than only at load and on resize. The host reads
+// the newest record before each capture, so a window that has been moved,
+// resized or fullscreened is described by the record the host is about to use
+// — and a declaration refused mid-transition is simply replaced a second later
+// instead of stranding the run on stale rectangles.
+//
+// `beat` rides along because a stalled page and a dropped frame are
+// indistinguishable in the pixels. The host gates on this advancing before it
+// treats any mismatch as the device's fault.
+function declare() {
+  const regions = build();
+  if (!regions) return;
+  post({ kind: 'layout', t: Date.now(), screen: { w: screen.width, h: screen.height },
+         dpr: window.devicePixelRatio, viewport: [window.innerWidth, window.innerHeight],
+         churn, beat: n, regions });
+}
+
+// Declared before `declare()` runs: `declare` reads it, and a `let` below the
+// call would put the first invocation in the temporal dead zone and kill the
+// page before it publishes anything.
+let n = 0;
+declare();
+setInterval(declare, 1000);
+
+setInterval(() => {
+  n++;
+  const s = document.getElementById('status');
+  if (s) s.textContent = 'probe beat ' + n;
+  // Touch every patch so the compositor has real work each beat, without
+  // changing any declared colour.
+  for (const d of document.querySelectorAll('.patch')) {
+    d.style.outline = (n % 2) ? '1px solid rgba(0,0,0,0)' : 'none';
+  }
+  if (!churnBox) return;
+  // Replace the whole churn subtree each beat: every child is a new layer
+  // candidate and every removal destroys one. `will-change: transform` on half
+  // of them forces actual promotion rather than leaving it to a heuristic.
+  churnBox.textContent = '';
+  // Spread across the container's own box, not the viewport's. `contain: strict`
+  // clips this container to a band inset 10%/18%, so viewport-sized coordinates
+  // put a fifth of the children outside it horizontally and most of them outside
+  // it vertically — clipped children are not composited, and churn a compositor
+  // culls is not stress. Twice the box height vertically so the scroll below has
+  // somewhere to travel.
+  const box = churnBox.getBoundingClientRect();
+  const W = Math.max(1, Math.round(box.width)), H = Math.max(1, Math.round(box.height));
+  for (let i = 0; i < 24; i++) {
+    const d = document.createElement('div');
+    d.style.position = 'absolute';
+    d.style.left = ((i * 137 + n * 31) % W) + 'px';
+    d.style.top = ((i * 89 + n * 17) % (H * 2)) + 'px';
+    d.style.width = '160px';
+    d.style.height = '120px';
+    d.style.background = `hsl(${(i * 37 + n * 11) % 360} 60% 45%)`;
+    if (i % 2) d.style.willChange = 'transform';
+    d.style.transform = `translateZ(0) rotate(${(n + i) % 7}deg)`;
+    churnBox.appendChild(d);
+  }
+  // Scroll the churn container, which the fixed patches must be immune to.
+  churnBox.scrollTop = (n * 53) % Math.max(1, H);
+  // After the scroll, so the witness can compensate for where it settled.
+  placeWitness();
+}, beatMs);
+</script>
+</body>

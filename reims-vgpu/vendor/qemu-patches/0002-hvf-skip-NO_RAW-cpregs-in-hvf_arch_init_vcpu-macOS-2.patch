@@ -1,0 +1,44 @@
+From c8f863a000aba802c6d6e64028c6bf8a974c5d55 Mon Sep 17 00:00:00 2001
+From: Anees Iqbal <anees@usesimple.ai>
+Date: Thu, 2 Jul 2026 10:14:38 +0200
+Subject: [PATCH 2/5] hvf: skip NO_RAW cpregs in hvf_arch_init_vcpu (macOS 26
+ host)
+
+hvf_arch_init_vcpu() asserts !(ri->type & ARM_CP_NO_RAW) while building the
+cpreg sync list. Some ID registers (e.g. ID_AA64ISAR0_EL1) became
+ARM_CP_NO_RAW in system emulation because a field is computed at read time
+via a readfn (RNDR depends on SCR_EL3.TRNDR under FEAT_RNG_TRAP). Such regs
+have no raw backing store to sync with HVF and must not be added to the sync
+list. Without this, the assert aborts on a macOS 26 host and no aarch64 HVF
+guest (incl. vmapple) can start. Verified live: the vmapple guest gets past
+HVF vCPU init to iBootStage2 with this change.
+---
+ target/arm/hvf/hvf.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+index 8b902c68..8cdb4c34 100644
+--- a/target/arm/hvf/hvf.c
++++ b/target/arm/hvf/hvf.c
+@@ -1437,8 +1437,16 @@ int hvf_arch_init_vcpu(CPUState *cpu)
+             continue;
+         }
+ 
+-        if (ri) {
+-            assert(!(ri->type & ARM_CP_NO_RAW));
++        /*
++         * Skip NO_RAW registers instead of asserting on them. Some ID registers
++         * (e.g. ID_AA64ISAR0_EL1) became ARM_CP_NO_RAW in system emulation
++         * because a field is computed at read time via a readfn (RNDR depends on
++         * SCR_EL3.TRNDR under FEAT_RNG_TRAP). Such regs have no raw backing store
++         * to sync with HVF, so they must not be added to the cpreg sync list.
++         * Without this, hvf_arch_init_vcpu() aborts on macOS hosts and no
++         * aarch64 HVF guest (incl. vmapple) can start.
++         */
++        if (ri && !(ri->type & ARM_CP_NO_RAW)) {
+             arm_cpu->cpreg_indexes[sregs_cnt++] = kvm_id;
+         }
+     }
+-- 
+2.54.0
+

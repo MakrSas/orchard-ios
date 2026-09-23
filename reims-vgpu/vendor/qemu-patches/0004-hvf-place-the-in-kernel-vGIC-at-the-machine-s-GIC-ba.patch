@@ -1,0 +1,113 @@
+From 10448002f6399071eab4be1eb06f1ba41479cc24 Mon Sep 17 00:00:00 2001
+From: Anees Iqbal <hello@aneesiqbal.ai>
+Date: Sat, 11 Jul 2026 07:27:41 +0300
+Subject: [PATCH 4/5] hvf: place the in-kernel vGIC at the machine's GIC bases
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+hvf_arch_vm_create() hardcoded the hv_gic distributor/redistributor GPAs
+to hw/arm/virt.c's base_memmap (0x08000000/0x080A0000). On any machine
+whose GICv3 lives elsewhere — vmapple puts it at 0x10000000/0x10010000 —
+kernel-irqchip=on placed the in-kernel vGIC at addresses the guest never
+touches, while the guest's dist/redist accesses landed on the GIC
+device's ops-less MemoryRegions (reads-as-zero, writes ignored). A
+vmapple macOS guest wedges in iBootStage2 that way (no timer PPI ever
+enabled, one vCPU spins at 100%).
+
+Add a MachineClass::get_vgic_bases hook (mirroring
+get_kernel_irqchip_default), implement it for vmapple from its memmap,
+and fall back to the virt values when a board does not provide it.
+
+With this, vmapple boots macOS to the desktop under kernel-irqchip=on:
+render oracle clean (1440x1080 screendump, desktop content), ssh up,
+in-guest top idle. Verified on macOS 26.5 host, Monterey vmapple guest.
+---
+ hw/vmapple/vmapple.c     |  9 +++++++++
+ include/hw/core/boards.h |  8 ++++++++
+ target/arm/hvf/hvf.c     | 23 ++++++++++++++++++++---
+ 3 files changed, 37 insertions(+), 3 deletions(-)
+
+diff --git a/hw/vmapple/vmapple.c b/hw/vmapple/vmapple.c
+index 90e3f7ef..b7993b6f 100644
+--- a/hw/vmapple/vmapple.c
++++ b/hw/vmapple/vmapple.c
+@@ -587,6 +587,14 @@ static const CPUArchIdList *vmapple_possible_cpu_arch_ids(MachineState *ms)
+     return ms->possible_cpus;
+ }
+ 
++static bool vmapple_get_vgic_bases(const MachineState *ms,
++                                   uint64_t *dist_base, uint64_t *redist_base)
++{
++    *dist_base = memmap[VMAPPLE_GIC_DIST].base;
++    *redist_base = memmap[VMAPPLE_GIC_REDIST].base;
++    return true;
++}
++
+ static GlobalProperty vmapple_compat_defaults[] = {
+     { TYPE_VIRTIO_PCI, "disable-legacy", "on" },
+     /*
+@@ -611,6 +619,7 @@ static void vmapple_machine_class_init(ObjectClass *oc, const void *data)
+     mc->cpu_index_to_instance_props = vmapple_cpu_index_to_props;
+     mc->default_cpu_type = ARM_CPU_TYPE_NAME("host");
+     mc->get_default_cpu_node_id = vmapple_get_default_cpu_node_id;
++    mc->get_vgic_bases = vmapple_get_vgic_bases;
+     mc->default_ram_id = "mach-vmapple.ram";
+     mc->desc = "Apple aarch64 Virtual Machine";
+ 
+diff --git a/include/hw/core/boards.h b/include/hw/core/boards.h
+index 29c68931..d6cb04de 100644
+--- a/include/hw/core/boards.h
++++ b/include/hw/core/boards.h
+@@ -281,6 +281,14 @@ struct MachineClass {
+     int (*get_physical_address_range)(MachineState *machine,
+         int default_ipa_size, int max_ipa_size);
+     bool (*get_kernel_irqchip_default) (const MachineState *machine);
++    /*
++     * Guest physical addresses of the GICv3 distributor and (first)
++     * redistributor region, for accelerators (HVF) that must place an
++     * in-kernel vGIC before any vCPU exists. Returns false when the
++     * board has no GICv3.
++     */
++    bool (*get_vgic_bases) (const MachineState *machine,
++                            uint64_t *dist_base, uint64_t *redist_base);
+ 
+     BlockInterfaceType block_default_type;
+     int units_per_default_bus;
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+index 868de42e..b32589f9 100644
+--- a/target/arm/hvf/hvf.c
++++ b/target/arm/hvf/hvf.c
+@@ -1353,9 +1353,26 @@ hv_return_t hvf_arch_vm_create(MachineState *ms, uint32_t pa_range)
+              * This must be done prior to the creation of any vCPU
+              * but past hv_vm_create()
+              */
+-            hv_gic_config_t cfg = hv_gic_config_create();
+-            hv_gic_config_set_distributor_base(cfg, 0x08000000);
+-            hv_gic_config_set_redistributor_base(cfg, 0x080A0000);
++            MachineClass *mc = MACHINE_GET_CLASS(ms);
++            /*
++             * Fallback matches hw/arm/virt.c's base_memmap; boards whose
++             * GICv3 lives elsewhere must implement get_vgic_bases or the
++             * in-kernel vGIC is placed at GPAs the guest never accesses.
++             */
++            uint64_t dist_base = 0x08000000;
++            uint64_t redist_base = 0x080A0000;
++            hv_gic_config_t cfg;
++
++            if (mc->get_vgic_bases &&
++                !mc->get_vgic_bases(ms, &dist_base, &redist_base)) {
++                error_report("HVF: machine has no GICv3 for the platform vGIC");
++                ret = HV_UNSUPPORTED;
++                goto cleanup;
++            }
++
++            cfg = hv_gic_config_create();
++            hv_gic_config_set_distributor_base(cfg, dist_base);
++            hv_gic_config_set_redistributor_base(cfg, redist_base);
+             ret = hv_gic_create(cfg);
+             if (ret != HV_SUCCESS) {
+                 error_report("error creating platform VGIC");
+-- 
+2.54.0
+

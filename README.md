@@ -65,7 +65,7 @@ anything has gone wrong.
 | Path | What it is |
 |---|---|
 | `qemu/` | Upstream QEMU with our changes applied (see `TECHNICAL.md` for the list). |
-| `reims-vgpu/` | The paravirtual GPU — [steelbrain/reims-vgpu](https://github.com/steelbrain/reims-vgpu), a Rust crate that turns Apple's PVG command stream into Vulkan. Not ours. |
+| `reims-vgpu/` | The paravirtual GPU, vendored in-tree — [steelbrain/reims-vgpu](https://github.com/steelbrain/reims-vgpu), a Rust crate that turns Apple's PVG command stream into Vulkan, with our changes baked in. Not ours. |
 | `scripts/` | Fetch, patch, build and run. |
 | `TECHNICAL.md` | How the whole thing works, and what each change is for. |
 | `CONTRIBUTING.md` | Where a change belongs, how to test it, and the evidence rule. |

@@ -1,0 +1,37 @@
+# Cargo workspace for the project's host-side product crate.
+#
+# Product path: crates/reims-vgpu (protocol + C ABI + Metal|Vulkan backend).
+# UEFI option ROM: crates/reims-vgpu-efi (own Cargo workspace — x86_64-unknown-uefi;
+# not a member here so host builds never pull the no_std PE graph).
+[workspace]
+resolver = "2"
+members = [
+  "crates/reims-vgpu",
+  "crates/reims-vgpu-core",
+  "crates/reims-vgpu-config",
+  "crates/reims-vgpu-memory",
+  "crates/reims-vgpu-observe",
+  "crates/reims-vgpu-paging",
+  "crates/reims-vgpu-protocol",
+  "crates/reims-vgpu-testkit",
+  "crates/reims-vgpu-vulkan",
+  "crates/reims-vgpu-wire",
+]
+exclude = [
+  "crates/reims-vgpu-efi",
+]
+
+# The shipping artifact is this workspace's staticlib linked into QEMU, and the
+# device's own largest cost is host CPU in that staticlib — `chain_phase` divides
+# the whole per-draw chain and its columns are Rust work, not GPU work. So these
+# are the settings the product runs under, not a developer convenience.
+#
+# `panic` stays at the default `unwind` and must not become `abort`: every
+# `reims_vgpu_qemu_*` entry point wraps its body in `catch_unwind`
+# (`device::mod`), because a Rust panic unwinding into QEMU's C frames is
+# undefined behavior. Aborting would turn every caught panic into a dead VM.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+incremental = true
