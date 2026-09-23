@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 import CoreGraphics
 import UniformTypeIdentifiers
 #if canImport(UIKit)
@@ -1067,6 +1068,7 @@ final class VMModel: ObservableObject {
     private var bootWatch: Timer?
     private var memoryWatch: Timer?
     private var memoryLogged: UInt64 = 0
+    private var memoryWarned = false
 
     /// A line in the log every half minute saying where CPU0 is and how many
     /// cores run: the only progress report a macOS guest gives once iBoot has
@@ -1091,6 +1093,7 @@ final class VMModel: ObservableObject {
         // the last one before the log stops is how close it got.
         memoryWatch?.invalidate()
         memoryLogged = 0
+        memoryWarned = false
         switch Threads.increasedMemoryLimitGranted() {
         case true?:  LogCapture.shared.note(L("Повышенный лимит памяти: право выдано"))
         case false?: LogCapture.shared.note(L("Повышенный лимит памяти: права нет — подпись установки его не сохранила"))
@@ -1102,6 +1105,14 @@ final class VMModel: ObservableObject {
                   bytes >= self.memoryLogged + 100 * 1_048_576 else { return }
             self.memoryLogged = bytes
             LogCapture.shared.note(L("Память: %@", Threads.memoryLine(footprint: bytes)))
+            #if os(iOS)
+            // Said once, and loudly: the system kills the app at the ceiling
+            // without a word in any log, and this is the last chance to say so.
+            if os_proc_available_memory() < 200 * 1_048_576, !self.memoryWarned {
+                self.memoryWarned = true
+                LogCapture.shared.note(L("ПАМЯТЬ НА ИСХОДЕ: до потолка меньше 200 МБ — iOS вот-вот закроет приложение. Уменьшите память гостя."))
+            }
+            #endif
             LogCapture.shared.note("  " + Threads.regionBreakdown())
         }
         RunLoop.main.add(memory, forMode: .common)
