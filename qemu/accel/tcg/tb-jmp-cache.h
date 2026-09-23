@@ -13,14 +13,12 @@
 #include "exec/cpu-common.h"
 
 /*
- * 16384 entries rather than 4096. A bigger cache used to cost on every
- * flush, which cleared it entry by entry, and a guest kernel flushes its
- * TLB — and with it this cache — often. The flush is now a generation bump
- * (below), so the size no longer does: on an iPhone running a macOS guest
- * the misses that fell through to the hash table (helper_lookup_tb_ptr,
- * qht_lookup_custom, tb_htable_lookup) were 12-13 % of CPU.
+ * 4096 entries, as upstream. A generation-based flush (below) made a bigger
+ * cache free to empty, but 16384 entries measured no better on an iPhone
+ * running a macOS guest: the lookups that remain are not misses, and a
+ * 384 KiB cache per vCPU no longer fits in the core's L1.
  */
-#define TB_JMP_CACHE_BITS 14
+#define TB_JMP_CACHE_BITS 12
 #define TB_JMP_CACHE_SIZE (1 << TB_JMP_CACHE_BITS)
 
 /*

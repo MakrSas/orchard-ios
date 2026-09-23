@@ -814,6 +814,16 @@ typedef struct CPUArchState {
         uint64_t hcr;
         uint64_t scr;
         uint32_t va[2][2];
+        /*
+         * The fast path's masks, by [bit 55][data], valid when `fast`:
+         * the implementation-defined hash, PAuth2 or later, no MTX.
+         */
+        bool fast;
+        uint8_t fast_tbi[2][2];
+        uint64_t fast_field[2][2];      /* the bits the PAC may occupy */
+        uint64_t fast_keep_ptr[2][2];   /* what AddPAC keeps of the pointer */
+        uint64_t fast_keep_pac[2][2];   /* what AddPAC keeps of the PAC */
+        uint64_t fast_cmp[2][2];        /* what Auth compares */
     } pauth_ctx;
 
     /* Fields up to this point are cleared by a CPU reset */

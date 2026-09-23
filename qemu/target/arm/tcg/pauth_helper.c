@@ -438,11 +438,28 @@ static void pauth_ctx_fill(CPUARMState *env, int core_idx)
            : PAUTH_ALG_IMPDEF;
     c->feature = cpu_isar_feature(pauth_feature, cpu);
 
+    c->fast = c->alg == PAUTH_ALG_IMPDEF && c->feature >= PauthFeat_2;
     for (int select = 0; select < 2; select++) {
         for (int data = 0; data < 2; data++) {
             ARMVAParameters param =
                 aa64_va_parameters(env, (uint64_t)select << 55, s1, data, false);
+            int bot = 64 - param.tsz;
+            int top = 64 - 8 * param.tbi;
+            uint64_t field = MAKE_64BIT_MASK(bot, top - bot);
+
             memcpy(&c->va[select][data], &param, sizeof(param));
+            c->fast &= !param.mtx;
+            c->fast_tbi[select][data] = param.tbi;
+            c->fast_field[select][data] = field;
+            c->fast_cmp[select][data] = field & ~MAKE_64BIT_MASK(55, 1);
+            if (param.tbi) {
+                c->fast_keep_ptr[select][data] = ~MAKE_64BIT_MASK(bot, 55 - bot + 1);
+                c->fast_keep_pac[select][data] = MAKE_64BIT_MASK(bot, 54 - bot + 1);
+            } else {
+                c->fast_keep_ptr[select][data] = MAKE_64BIT_MASK(0, bot);
+                c->fast_keep_pac[select][data] =
+                    ~(MAKE_64BIT_MASK(55, 1) | MAKE_64BIT_MASK(0, bot));
+            }
         }
     }
     c->valid = true;
@@ -474,12 +491,77 @@ static inline ARMVAParameters pauth_va_parameters(CPUARMState *env,
     return param;
 }
 
+/*
+ * AddPAC and Auth for the one configuration a macOS guest runs in — the
+ * implementation-defined hash, PAuth2 or later, no MTX — with the pointer
+ * layout's masks taken from the context instead of built from tsz and tbi
+ * each time. Step for step the generic code below with those three facts
+ * fixed; anything else takes the generic code.
+ */
+static inline ARMPACKey pauth_mixed_key(CPUARMState *env, ARMPACKey key)
+{
+    if (env->pauth_ctx.kmix) {
+        key.lo ^= env->keys.kernel.lo;
+        key.hi ^= env->keys.kernel.hi;
+    }
+    return key;
+}
+
+static inline uint64_t pauth_fast_addpac(CPUARMState *env, uint64_t ptr,
+                                         uint64_t modifier, ARMPACKey *key,
+                                         bool data)
+{
+    typeof(env->pauth_ctx) *c = &env->pauth_ctx;
+    int select = extract64(ptr, 55, 1);
+    uint64_t field = c->fast_field[select][data];
+    uint64_t ext = c->fast_tbi[select][data] ? sextract64(ptr, 55, 1)
+                                             : sextract64(ptr, 63, 1);
+    uint64_t ext_ptr = (ptr & ~field) | (ext & field);
+    uint64_t pac = pauth_computepac_impdef(ext_ptr, modifier,
+                                           pauth_mixed_key(env, *key));
+
+    pac ^= ptr;
+    return (pac & c->fast_keep_pac[select][data])
+         | (ext & MAKE_64BIT_MASK(55, 1))
+         | (ptr & c->fast_keep_ptr[select][data]);
+}
+
+/* Auth when it succeeds; false when it would fault, for the generic path. */
+static inline bool pauth_fast_auth(CPUARMState *env, uint64_t ptr,
+                                   uint64_t modifier, ARMPACKey *key,
+                                   bool data, bool is_combined,
+                                   uint64_t *out)
+{
+    typeof(env->pauth_ctx) *c = &env->pauth_ctx;
+    int select = extract64(ptr, 55, 1);
+    uint64_t field = c->fast_field[select][data];
+    uint64_t cmp = c->fast_cmp[select][data];
+    uint64_t orig_ptr = select ? ptr | field : ptr & ~field;
+    uint64_t pac = pauth_computepac_impdef(orig_ptr, modifier,
+                                           pauth_mixed_key(env, *key));
+    uint64_t result = ptr ^ (pac & cmp);
+    ARMPauthFeature fault_feature =
+        is_combined ? PauthFeat_FPACCOMBINED : PauthFeat_FPAC;
+
+    if (c->feature >= fault_feature
+        && ((result ^ sextract64(result, 55, 1)) & cmp)) {
+        return false;
+    }
+    *out = result;
+    return true;
+}
+
 static uint64_t pauth_addpac(CPUARMState *env, uint64_t ptr, uint64_t modifier,
                              ARMPACKey *key, bool data)
 {
-    ARMVAParameters param = pauth_va_parameters(env, ptr, data);
+    ARMVAParameters param;
     ARMPauthFeature pauth_feature = env->pauth_ctx.feature;
     uint64_t pac, ext_ptr, ext, test;
+
+    if (likely(env->pauth_ctx.fast)) {
+        return pauth_fast_addpac(env, ptr, modifier, key, data);
+    }
+    param = pauth_va_parameters(env, ptr, data);
     int bot_bit, top_bit;
 
     /* If tagged pointers are in use, use ptr<55>, otherwise ptr<63>.  */
@@ -569,9 +651,20 @@ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
                            ARMPACKey *key, bool data, int keynumber,
                            uintptr_t ra, bool is_combined)
 {
-    ARMVAParameters param = pauth_va_parameters(env, ptr, data);
+    ARMVAParameters param;
     ARMPauthFeature pauth_feature = env->pauth_ctx.feature;
     int bot_bit, top_bit;
+
+    if (likely(env->pauth_ctx.fast)) {
+        uint64_t result;
+
+        if (likely(pauth_fast_auth(env, ptr, modifier, key, data,
+                                   is_combined, &result))) {
+            return result;
+        }
+        /* A failure faults: the generic path below raises it. */
+    }
+    param = pauth_va_parameters(env, ptr, data);
     uint64_t pac, orig_ptr, cmp_mask;
 
     orig_ptr = pauth_original_ptr(ptr, param);
