@@ -350,6 +350,55 @@ void inferno_input_touch(int32_t x, int32_t y, bool pressed)
     bql_unlock();
 }
 
+/*
+ * The pointer as a trackpad drives it: an absolute position the app keeps
+ * itself, a button mask (bit 0 left, bit 1 right) and wheel steps (positive
+ * scrolls up). Only buttons whose state changed are sent, so holding one
+ * across moves is a drag.
+ */
+void inferno_input_pointer(int32_t x, int32_t y, uint32_t buttons, int32_t wheel)
+{
+    static const InputButton map[2] = { INPUT_BUTTON_LEFT, INPUT_BUTTON_RIGHT };
+    InfernoDisplay* d = &inferno_display;
+    QemuConsole*    con;
+    uint32_t        width = 0, height = 0, was = 0;
+    int             i;
+
+    if (!d->attached) { return; }
+
+    WITH_QEMU_LOCK_GUARD(&d->lock)
+    {
+        if (d->surface == NULL) { return; }
+        width  = surface_width(d->surface);
+        height = surface_height(d->surface);
+        was    = d->buttons;
+        d->buttons = buttons & 3;
+    }
+    if (width == 0 || height == 0) { return; }
+
+    x = MAX(0, MIN((int32_t)width - 1, x));
+    y = MAX(0, MIN((int32_t)height - 1, y));
+
+    con = inferno_dcl.con;
+    bql_lock();
+    qemu_input_queue_abs(con, INPUT_AXIS_X, x, 0, width);
+    qemu_input_queue_abs(con, INPUT_AXIS_Y, y, 0, height);
+    for (i = 0; i < 2; i++) {
+        if (((was ^ buttons) >> i) & 1) {
+            qemu_input_queue_btn(con, map[i], (buttons >> i) & 1);
+        }
+    }
+    qemu_input_event_sync();
+    for (i = 0; i < abs(wheel); i++) {
+        InputButton b = wheel > 0 ? INPUT_BUTTON_WHEEL_UP : INPUT_BUTTON_WHEEL_DOWN;
+        qemu_input_queue_btn(con, b, true);
+        qemu_input_event_sync();
+        qemu_input_queue_btn(con, b, false);
+        qemu_input_event_sync();
+    }
+    bql_unlock();
+}
+
 void inferno_input_function_key(uint32_t number, bool pressed)
 {
     /* Evdev codes: F1..F10 are contiguous, F11 and F12 are not. */

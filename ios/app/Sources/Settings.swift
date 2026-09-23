@@ -91,10 +91,34 @@ final class Settings: ObservableObject {
     }
     /// What `guestResolution` may be: the 16:9 modes the device accepts, the
     /// panel it announces being 16:9.
+    /// A guest mode `lines` tall with the phone screen's own shape, so the
+    /// desktop fills the screen instead of sitting between black bars. The width
+    /// is rounded to even, as the display device requires.
+    static func screenShaped(lines: Int) -> (width: Int, height: Int) {
+        #if canImport(UIKit)
+        let native = UIScreen.main.nativeBounds.size
+        let aspect = max(native.width, native.height) / max(min(native.width, native.height), 1)
+        #else
+        let aspect: CGFloat = 16.0 / 9.0
+        #endif
+        let width = Int((CGFloat(lines) * aspect / 2).rounded()) * 2
+        return (width, lines)
+    }
+
+    private static func screenTitle(_ lines: Int) -> String {
+        let size = screenShaped(lines: lines)
+        return L("Как экран: %d×%d", size.width, size.height)
+    }
+
     /// The guest display's refresh rate, as `REIMS_VGPU_DISPLAY_HZ` spells it.
     /// macOS paces its compositor to the display, so a slower one is less work
     /// for every emulated core. Empty keeps the device's 120 Hz.
     @AppStorage("guestRefresh") var guestRefresh: String = "" {
+        willSet { objectWillChange.send() }
+    }
+    /// The screen as a trackpad: the pointer moves by how far a finger
+    /// travels instead of jumping to where it lands.
+    @AppStorage("trackpadMode") var trackpadMode: Bool = false {
         willSet { objectWillChange.send() }
     }
     static let refreshChoices: [(value: String, title: String)] = [
@@ -103,6 +127,8 @@ final class Settings: ObservableObject {
         ("30", "30 Гц"),
     ]
     static let resolutionChoices: [(value: String, title: String)] = [
+        ("screen540", screenTitle(540)),
+        ("screen720", screenTitle(720)),
         ("", "1920×1080"),
         ("1600x900", "1600×900"),
         ("1280x720", "1280×720"),
@@ -214,7 +240,13 @@ final class Settings: ObservableObject {
         // device tree nodes cost boot time and idle CPU, so a machine started without sound carries none
         // of them.
         if guestAudio { env["INFERNO_AUDIO"] = "1" }
-        if !guestResolution.isEmpty { env["REIMS_VGPU_DISPLAY_MODE"] = guestResolution }
+        if let lines = Int(guestResolution.dropFirst("screen".count)),
+           guestResolution.hasPrefix("screen") {
+            let size = Settings.screenShaped(lines: lines)
+            env["REIMS_VGPU_DISPLAY_SIZE"] = "\(size.width)x\(size.height)"
+        } else if !guestResolution.isEmpty {
+            env["REIMS_VGPU_DISPLAY_MODE"] = guestResolution
+        }
         if !guestRefresh.isEmpty { env["REIMS_VGPU_DISPLAY_HZ"] = guestRefresh }
         return env
     }
@@ -469,8 +501,9 @@ private struct ScreenSettings: View {
                             Text(L($0.title)).tag($0.value)
                         }
                     }
+                    Toggle(L("Режим трекпада"), isOn: $settings.trackpadMode)
                 } footer: {
-                    Text(L("С каким разрешением загружается macOS. Каждый пиксель рабочего стола гость собирает на эмулируемых ядрах, а приложение потом рисует: у 1280×720 пикселей в 2¼ раза меньше, чем у 1920×1080, у 960×540 — вчетверо. Остальные режимы остаются в настройках самой macOS. Частота — сколько раз в секунду macOS перерисовывает экран и анимации: при 30 Гц этой работы вчетверо меньше, чем при 120. Применяется при запуске машины."))
+                    Text(L("С каким разрешением загружается macOS. Каждый пиксель рабочего стола гость собирает на эмулируемых ядрах, а приложение потом рисует: у 1280×720 пикселей в 2¼ раза меньше, чем у 1920×1080, у 960×540 — вчетверо. Остальные режимы остаются в настройках самой macOS. Частота — сколько раз в секунду macOS перерисовывает экран и анимации: при 30 Гц этой работы вчетверо меньше, чем при 120. Применяется при запуске машины. В режиме трекпада курсор движется на столько, на сколько проехал палец: касание — клик, два пальца — правый клик и прокрутка, задержать палец и повести — перетаскивание."))
                 }
             }
 

@@ -69,6 +69,6 @@ vtool -show-build-version "$lib" | grep -E 'platform|minos'
 # every symbol, since grep's early exit kills nm with SIGPIPE.
 exported="$(nm -gU "$lib")"
 for sym in qemu_init qemu_main_loop qemu_cleanup inferno_display_attach inferno_display_read \
-           inferno_input_touch inferno_input_function_key inferno_input_key_tap reims_vgpu_qemu_scanout_copy; do
+           inferno_input_touch inferno_input_function_key inferno_input_key_tap inferno_input_pointer reims_vgpu_qemu_scanout_copy; do
     if grep -q " _$sym\$" <<<"$exported"; then echo "  exports $sym"; else echo "  MISSING $sym"; fi
 done

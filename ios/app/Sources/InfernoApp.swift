@@ -86,6 +86,10 @@ final class GuestFrame: ObservableObject {
 
 final class VMModel: ObservableObject {
     let picture = GuestFrame()
+    #if canImport(UIKit)
+    /// The pointer when the screen works as a trackpad; see Trackpad.swift.
+    let trackpad = Trackpad()
+    #endif
     @Published var displayStatus: GuestDisplayStatus = .disconnected
     @Published var qemuState: QemuBridge.State = .idle
     /// Whether the guest ever got itself an address over the USB link.
@@ -1536,6 +1540,14 @@ struct ScreenView: View {
     /// keyboard reaches the guest either way. See GuestKeyboard.swift.
     @State private var keyboard = false
 
+    private var trackpadOn: Bool {
+        #if canImport(UIKit)
+        return VMConfig.macGuest && settings.trackpadMode
+        #else
+        return false
+        #endif
+    }
+
     /// How far the picture keeps from each edge.
     ///
     /// The same at top and bottom, and enough to clear whichever of the two
@@ -1656,9 +1668,19 @@ struct ScreenView: View {
                     }
                     .onEnded { value in
                         if let box { model.release(at: value.location, in: box) }
-                    }
+                    },
+                including: trackpadOn ? .subviews : .all
             )
             #if canImport(UIKit)
+            // The trackpad takes the touches instead, over the whole screen:
+            // the pointer moves by how far the finger travels.
+            .overlay {
+                if trackpadOn, let box, let fb = model.framebufferSize, box.width > 0 {
+                    TrackpadSurface(trackpad: model.trackpad,
+                                    size: CGSize(width: fb.width, height: fb.height),
+                                    scale: CGFloat(fb.width) / box.width)
+                }
+            }
             // Always first responder while the machine runs, so a hardware
             // keyboard reaches the guest without the button; it never brings
             // up the system keyboard (see KeyCatcherView).

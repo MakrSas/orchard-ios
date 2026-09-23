@@ -137,6 +137,9 @@ void inferno_input_function_key(uint32_t number, bool pressed);
 void inferno_input_key_hid(uint32_t usage, bool pressed);
 /* A whole keystroke under one BQL: `mods` bit 0 Shift, bit 1 Command. */
 void inferno_input_key_tap(uint32_t usage, uint32_t mods);
+/* Pointer as a trackpad drives it: position, buttons (bit 0 left, bit 1
+ * right), wheel steps (positive up). */
+void inferno_input_pointer(int32_t x, int32_t y, uint32_t buttons, int32_t wheel);
 
 #ifdef __cplusplus
 }

@@ -1,0 +1,220 @@
+Subject: [PATCH] display: REIMS_VGPU_DISPLAY_SIZE, a mode in the host screen's shape
+
+A phone's screen is nearer 19.5:9 than 16:9, and a 16:9 desktop sits between
+black bars on it. REIMS_VGPU_DISPLAY_SIZE=WIDTHxHEIGHT (even sides, 640x360
+to 1920x1080 pixels) makes that the guest's only mode, and the panel the guest
+is told about takes the same shape: the height stays 27 cm and the width is
+the whole centimetre that keeps the pixels square. It takes precedence over
+REIMS_VGPU_DISPLAY_MODE; out of bounds or unparseable, it is refused on the
+failure channel and the other modes are offered.
+
+reims-vgpu-config gains dimensions(), which parses WIDTHxHEIGHT and hands back
+what it cannot, as choice() does.
+
+diff --git a/crates/reims-vgpu-config/src/lib.rs b/crates/reims-vgpu-config/src/lib.rs
+index 571bb9cb..2eb1a655 100644
+--- a/crates/reims-vgpu-config/src/lib.rs
++++ b/crates/reims-vgpu-config/src/lib.rs
+@@ -1274,6 +1274,17 @@ pub const DISPLAY_MODE: &str = "REIMS_VGPU_DISPLAY_MODE";
+ /// Unset is 120 Hz, as before. A value outside the list is refused on the
+ /// failure channel and 120 Hz is used.
+ pub const DISPLAY_HZ: &str = "REIMS_VGPU_DISPLAY_HZ";
++
++/// **Not a switch: a size.** The guest display's one mode, as `WIDTHxHEIGHT`,
++/// read through [`dimensions`].
++///
++/// For a host whose screen is not 16:9 — a phone is nearer 19.5:9 — so the
++/// guest's desktop can have the screen's own shape instead of sitting between
++/// black bars. When set and in bounds it is the only mode offered, and the panel
++/// the guest is told about takes the same shape, so its pixels stay square. It
++/// takes precedence over [`DISPLAY_MODE`]. A value that does not parse, or is
++/// out of bounds, is refused on the failure channel and ignored.
++pub const DISPLAY_SIZE: &str = "REIMS_VGPU_DISPLAY_SIZE";
+ }
+ 
+ /// What one variable says, including the two ways it says nothing usable.
+@@ -1366,6 +1377,37 @@ pub enum Choice {
+     Refused(String),
+ }
+ 
++/// What a `WIDTHxHEIGHT` variable says.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum Dimensions {
++    /// Nothing set.
++    Unset,
++    /// A width and a height, as written. The caller checks them against what it
++    /// can do; parsing is not permission.
++    Named(u32, u32),
++    /// Set to something that is not `WIDTHxHEIGHT`, carrying the raw text.
++    Refused(String),
++}
++
++/// Read `name` as `WIDTHxHEIGHT` (`x` or `X`, decimal, no spaces inside).
++pub fn dimensions(name: &str) -> Dimensions {
++    let Some(raw) = std::env::var_os(name) else {
++        return Dimensions::Unset;
++    };
++    let value = raw.to_string_lossy().into_owned();
++    let trimmed = value.trim();
++    if trimmed.is_empty() {
++        return Dimensions::Unset;
++    }
++    let parsed = trimmed
++        .split_once(['x', 'X'])
++        .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)));
++    match parsed {
++        Some((w, h)) => Dimensions::Named(w, h),
++        None => Dimensions::Refused(value),
++    }
++}
++
+ /// Read `name` as a choice among `allowed`, ASCII-case-insensitively.
+ ///
+ /// `allowed` is the caller's list because only the caller knows it: the set of
+@@ -1512,6 +1554,19 @@ mod tests {
+         with_probe(value, || choice("REIMS_VGPU_TEST_PROBE", allowed))
+     }
+ 
++    /// A size is two decimal numbers around an `x`, or it is handed back.
++    #[test]
++    fn dimensions_parse_width_by_height_or_refuse() {
++        let probe = |v| with_probe(v, || dimensions("REIMS_VGPU_TEST_PROBE"));
++        assert_eq!(probe(None), Dimensions::Unset);
++        assert_eq!(probe(Some(" ")), Dimensions::Unset);
++        assert_eq!(probe(Some("1170x540")), Dimensions::Named(1170, 540));
++        assert_eq!(probe(Some(" 960X540 ")), Dimensions::Named(960, 540));
++        assert_eq!(probe(Some("960")), Dimensions::Refused("960".to_owned()));
++        assert_eq!(probe(Some("wide")), Dimensions::Refused("wide".to_owned()));
++        assert_eq!(probe(Some("1x-2")), Dimensions::Refused("1x-2".to_owned()));
++    }
++
+     /// A choice answers with one of the caller's own strings, or with the raw
+     /// text it could not place — and never with a fourth thing.
+     ///
+diff --git a/crates/reims-vgpu/src/runtime/drain/mod.rs b/crates/reims-vgpu/src/runtime/drain/mod.rs
+index 56a68906..ee00cbc4 100644
+--- a/crates/reims-vgpu/src/runtime/drain/mod.rs
++++ b/crates/reims-vgpu/src/runtime/drain/mod.rs
+@@ -4284,8 +4284,11 @@ fn fill_display_descriptor<H: HostMemory + HostOps>(
+     // float pair is what `displayDimensionFloats` licenses at rung 0x2a and
+     // above, and leaving it unwritten is a 0 x 0 mm panel to any guest that gets
+     // there.
+-    let (width_f32, width_mm) = display_dimension_mm(DISPLAY_WIDTH_MM);
+-    let (height_f32, height_mm) = display_dimension_mm(DISPLAY_HEIGHT_MM);
++    let modes = advertised_display_modes();
++    let modes = modes.as_slice();
++    let (panel_w, panel_h) = display_panel_mm(modes.first().copied());
++    let (width_f32, width_mm) = display_dimension_mm(panel_w);
++    let (height_f32, height_mm) = display_dimension_mm(panel_h);
+     shared_w16(host, gpa, DISPLAY_DESC_WIDTH_MM, width_mm, psz);
+     shared_w16(host, gpa, DISPLAY_DESC_HEIGHT_MM, height_mm, psz);
+     shared_w32(
+@@ -4315,8 +4318,6 @@ fn fill_display_descriptor<H: HostMemory + HostOps>(
+         psz,
+     );
+ 
+-    let modes = advertised_display_modes();
+-    let modes = modes.as_slice();
+     shared_w16(
+         host,
+         gpa,
+@@ -4357,7 +4358,54 @@ fn advertised_display_modes() -> Vec<(u16, u16)> {
+     MODES.get_or_init(select_display_modes).clone()
+ }
+ 
++/// The panel the guest is told it has, in millimetres: the default 48 x 27 cm
++/// for a 16:9 native mode, and otherwise the same height with the width that
++/// makes the native mode's pixels square, in whole centimetres because that is
++/// all the guest's EDID keeps. See `DISPLAY_WIDTH_MM` for why the two must agree.
++fn display_panel_mm(native: Option<(u16, u16)>) -> (u16, u16) {
++    let Some((w, h)) = native.filter(|(w, h)| *w > 0 && *h > 0) else {
++        return (DISPLAY_WIDTH_MM, DISPLAY_HEIGHT_MM);
++    };
++    let width_cm =
++        (u32::from(DISPLAY_HEIGHT_MM) * u32::from(w) + u32::from(h) * 5) / (u32::from(h) * 10);
++    let width_mm = (width_cm * 10).clamp(100, 1000) as u16;
++    (width_mm, DISPLAY_HEIGHT_MM)
++}
++
++/// The bounds a `REIMS_VGPU_DISPLAY_SIZE` mode must sit inside: even sides,
++/// no fewer pixels than 640x360 and no more than 1920x1080 holds, and no side
++/// past what the scanout path takes.
++fn display_size_in_bounds(w: u32, h: u32) -> bool {
++    w % 2 == 0
++        && h % 2 == 0
++        && (320..=2560).contains(&w)
++        && (240..=1440).contains(&h)
++        && w * h >= 640 * 360
++        && w * h <= 1920 * 1080
++}
++
+ fn select_display_modes() -> Vec<(u16, u16)> {
++    match crate::config::dimensions(crate::config::DISPLAY_SIZE) {
++        crate::config::Dimensions::Unset => {}
++        crate::config::Dimensions::Named(w, h) if display_size_in_bounds(w, h) => {
++            crate::observe::fail(format!(
++                "display_size_adopted mode={w}x{h} panel_mm={:?}",
++                display_panel_mm(Some((w as u16, h as u16)))
++            ));
++            return vec![(w as u16, h as u16)];
++        }
++        crate::config::Dimensions::Named(w, h) => {
++            crate::observe::fail(format!(
++                "display_size_refused value={w}x{h} (out of bounds: even sides, \
++                 640x360..1920x1080 pixels; the other modes are offered)"
++            ));
++        }
++        crate::config::Dimensions::Refused(raw) => {
++            crate::observe::fail(format!(
++                "display_size_refused value={raw:?} (not WIDTHxHEIGHT; the other modes are offered)"
++            ));
++        }
++    }
+     let default = vec![
+         (DISPLAY_MODE_EFI_W, DISPLAY_MODE_EFI_H),
+         (DISPLAY_MODE1_W, DISPLAY_MODE1_H),
+diff --git a/crates/reims-vgpu/src/runtime/drain/tests.rs b/crates/reims-vgpu/src/runtime/drain/tests.rs
+index 2e9136cd..1532f91b 100644
+--- a/crates/reims-vgpu/src/runtime/drain/tests.rs
++++ b/crates/reims-vgpu/src/runtime/drain/tests.rs
+@@ -3885,6 +3885,40 @@ fn delivered_vbl_cadence_equals_the_advertised_refresh_rate() {
+     );
+ }
+ 
++/// The panel follows the native mode's shape: unchanged for 16:9, and for a
++/// phone-shaped mode wide enough that its pixels stay square to within the
++/// centimetre the guest's EDID keeps.
++#[test]
++fn the_panel_takes_the_native_modes_shape() {
++    assert_eq!(
++        display_panel_mm(None),
++        (DISPLAY_WIDTH_MM, DISPLAY_HEIGHT_MM)
++    );
++    assert_eq!(display_panel_mm(Some((1920, 1080))), (480, 270));
++    assert_eq!(display_panel_mm(Some((960, 540))), (480, 270));
++    let (w, h) = display_panel_mm(Some((1170, 540)));
++    assert_eq!(h, DISPLAY_HEIGHT_MM);
++    assert_eq!(w % 10, 0, "whole centimetres");
++    let panel = f64::from(w) / f64::from(h);
++    let pixels = 1170.0 / 540.0;
++    assert!(
++        (panel - pixels).abs() / pixels < 0.02,
++        "{panel} vs {pixels}"
++    );
++
++    assert!(display_size_in_bounds(1170, 540));
++    assert!(display_size_in_bounds(1920, 1080));
++    assert!(!display_size_in_bounds(1171, 540), "odd width");
++    assert!(
++        !display_size_in_bounds(2560, 1440),
++        "more pixels than 1920x1080"
++    );
++    assert!(
++        !display_size_in_bounds(320, 240),
++        "fewer pixels than 640x360"
++    );
++}
++
+ /// The rate a process chose and the interval its limiter paces at are one
+ /// number: with nothing set they are the defaults the test above pins.
+ #[test]
