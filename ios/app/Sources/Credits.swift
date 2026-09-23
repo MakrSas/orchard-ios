@@ -42,7 +42,7 @@ struct Credit: Identifiable, Hashable {
     static let all: [Credit] = [
         Credit(github: "yaelliethy",
                name: "Youssef Elliethy",
-               did: L("Автор Orchard — форка QEMU, в котором macOS грузится штатной цепочкой Apple на машине apple-vm. Гость работает на этом эмуляторе, а это приложение — перенос Orchard на iPhone."),
+               did: L("Автор Orchard. Разобрал загрузчик Apple, её виртуализацию и системный стек настолько, чтобы доработать QEMU, перенести reims-vgpu и загрузить Apple Silicon macOS Ventura. Это приложение — перенос Orchard на iPhone."),
                x: nil, site: nil),
         Credit(github: "steelbrain",
                name: "Anees Iqbal",
@@ -58,7 +58,7 @@ struct Credit: Identifiable, Hashable {
                x: "HeWhomCodes", site: "https://chefkiss.dev"),
         Credit(github: "ChefKissInc",
                name: "ChefKiss",
-               did: L("Команда этого эмулятора. Их форк QEMU — основа большой части того, что здесь работает."),
+               did: L("Команда этого эмулятора. Их работа заложила основу, на которой стоит Orchard."),
                x: nil, site: "https://chefkiss.dev"),
         Credit(github: "",
                name: "QEMU",
