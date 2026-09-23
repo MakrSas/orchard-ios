@@ -42,11 +42,17 @@ enum L10n {
     /// anyone who had chosen English, with a black screen and an empty log.
     /// Built from an array, a repeat is just a repeat and the first one wins.
     private static let pairs: [(String, String)] = [
+        // Guest sound
+        ("Звуковая карта virtio-sound, звук идёт на телефон своей дорожкой и не глушит музыку, которая уже играет. Пока опыт: если в госте нет устройства вывода в «Настройки → Звук», значит, его драйвер карту не принял. Применяется при запуске машины.",
+            "A virtio-sound card; the sound plays on the phone on its own track and does not stop music that is already playing. Experimental: if the guest's Settings → Sound shows no output device, its driver did not take the card. Applied when the machine starts."),
+        ("Звук: в этой сборке библиотеки нет звукового вывода", "Sound: this build of the library has no audio output"),
+        ("Звук: вывод гостя включён (%d Гц)", "Sound: guest output on (%d Hz)"),
+        ("Звук: не удалось запустить вывод — %@", "Sound: could not start the output — %@"),
         // Shared folder
         ("Общая папка", "Shared folder"),
         ("Адрес в госте", "Address in the guest"),
-        ("Папка Shared в «Файлах» → Orchard доступна гостю по сети, по адресу http://10.0.2.2:8080. Из Терминала гостя: «curl -O http://10.0.2.2:8080/файл» забирает файл с телефона, «curl -T файл http://10.0.2.2:8080/» кладёт его на телефон. Скорость — как у сети гостя, порядка 15 МБ/с.",
-            "The Shared folder in Files → Orchard is served to the guest at http://10.0.2.2:8080. From the guest's Terminal, \"curl -O http://10.0.2.2:8080/file\" takes a file from the phone and \"curl -T file http://10.0.2.2:8080/\" puts one on it. As fast as the guest's network, around 15 MB/s."),
+        ("Папка Shared в «Файлах» → Orchard видна гостю по сети: в Finder гостя «Переход → Подключение к серверу» (⌘K), адрес http://10.0.2.2:8080, «Подключиться», затем «Как зарегистрированный пользователь» с любыми именем и паролем — «Как гость» на Ventura не подключается. Работает в обе стороны. Скорость — как у сети гостя, порядка 15 МБ/с.",
+            "The Shared folder in Files → Orchard is visible to the guest over the network: in the guest's Finder, Go → Connect to Server (⌘K), address http://10.0.2.2:8080, Connect, then Registered User with any name and password — Guest does not connect on Ventura. It works both ways. As fast as the guest's network, around 15 MB/s."),
         ("Общая папка: не удалось открыть сокет", "Shared folder: could not open a socket"),
         ("Общая папка: порт %d занят", "Shared folder: port %d is in use"),
         ("Общая папка: %@ (папка Shared в «Файлах»)", "Shared folder: %@ (the Shared folder in Files)"),

@@ -463,6 +463,12 @@ struct VMConfig {
             argv += ["-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0,romfile="]
         }
 
+        if audio {
+            // A virtio-sound card whose output goes to the app through the
+            // in-process backend (qemu/audio/orchardaudio.c, GuestSound.swift).
+            argv += ["-audiodev", "orchard,id=snd0", "-device", "virtio-sound-pci,audiodev=snd0"]
+        }
+
         if headless || builtInDisplay {
             // Nothing for the emulator to serve: either there is no screen at
             // all, or the app reads the framebuffer directly once the machine

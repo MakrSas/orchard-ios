@@ -89,22 +89,18 @@ started again in the same run: close the app and open it again.
 
 ## Sharing files with the guest
 
-Put files in **Files → On My iPhone → Orchard → Shared**; the guest reaches
-that folder at `http://10.0.2.2:8080`. From the guest's Terminal:
+Put files in **Files → On My iPhone → Orchard → Shared**, and in the guest's
+Finder choose **Go → Connect to Server** (⌘K), enter `http://10.0.2.2:8080`,
+**Connect**, then **Registered User** with any name and password — nothing
+checks them, but Ventura's WebDAV client will not mount without a user name,
+so **Guest** fails. The folder is mounted like a network drive and works both
+ways, around 15 MB/s. From the guest's Terminal, `curl` works as well:
 
 ```bash
 curl -O http://10.0.2.2:8080/name-of-the-file
 ```
 
-takes a file from the phone, and
-
-```bash
-curl -T some-file http://10.0.2.2:8080/
-```
-
-puts one there. It goes through the guest's network, around 15 MB/s, and can
-be turned off in **Settings… → Network**. Finder's Connect to Server does
-not mount it on Ventura yet.
+It can be turned off in **Settings… → Network**.
 
 ## Building from source
 

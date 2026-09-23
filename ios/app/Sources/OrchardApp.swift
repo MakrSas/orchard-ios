@@ -236,6 +236,9 @@ final class VMModel: ObservableObject {
                             self.displayStatus = .failed(why)
                         }
                     }
+                    if VMConfig.macGuest && self.config.audio {
+                        GuestSound.shared.start()
+                    }
                     self.serial.follow()
                     self.serial.attachInput(port: self.config.serialPort)
                     // The shell is opened without waiting for anyone to look at

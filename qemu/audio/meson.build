@@ -7,6 +7,10 @@ audio_ss.add(files(
   'noaudio.c',
   'wavaudio.c',
 ))
+# The in-process embedder's output (orchardaudio.c), with ui/orchard-embed.c.
+if get_option('shared_lib')
+  audio_ss.add(files('orchardaudio.c'))
+endif
 
 # deprecated since v10.2, to be removed
 if have_hmp
