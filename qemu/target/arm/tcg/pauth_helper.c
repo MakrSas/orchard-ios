@@ -362,20 +362,10 @@ static uint64_t pauth_computepac(CPUARMState *env, uint64_t data,
  * MMU index, bit 55 of the address and whether the pointer is data; the key
  * holds all four, and the TCR value is read afresh each time, so a changed
  * TCR simply misses. (aa64_va_parameters also reads TCR2/SCR/HCRX, but only
- * for PIE/AIE, which PAC never looks at.) Thread-local: under MTTCG each
- * vCPU runs on its own thread, and a thread that runs several vCPUs is still
- * exact because the key does not depend on which one it is.
+ * for PIE/AIE, which PAC never looks at.) Kept per CPU, in
+ * env->pauth_cache.
  */
-typedef struct PauthVACacheEntry {
-    uint64_t tcr;
-    int mmu_idx;
-    bool valid;
-    bool select;
-    bool data;
-    ARMVAParameters param;
-} PauthVACacheEntry;
-
-static __thread PauthVACacheEntry pauth_va_cache[16];
+QEMU_BUILD_BUG_ON(sizeof(ARMVAParameters) > sizeof(uint32_t));
 
 /*
  * The stage 1 regime these helpers sign for, from the cached hflags rather
@@ -411,19 +401,23 @@ static ARMVAParameters pauth_va_parameters(CPUARMState *env, uint64_t ptr,
 {
     uint64_t tcr = regime_tcr(env, mmu_idx);
     bool select = extract64(ptr, 55, 1);
-    PauthVACacheEntry *e =
-        &pauth_va_cache[((mmu_idx & 3) << 2 | select << 1 | data) & 15];
+    typeof(env->pauth_cache.va[0]) *e =
+        &env->pauth_cache.va[((mmu_idx & 3) << 2 | select << 1 | data) & 15];
+    ARMVAParameters param;
 
     if (!e->valid || e->tcr != tcr || e->mmu_idx != mmu_idx
         || e->select != select || e->data != data) {
-        e->param = aa64_va_parameters(env, ptr, mmu_idx, data, false);
+        param = aa64_va_parameters(env, ptr, mmu_idx, data, false);
+        memcpy(&e->param, &param, sizeof(param));
         e->tcr = tcr;
         e->mmu_idx = mmu_idx;
         e->select = select;
         e->data = data;
         e->valid = true;
+        return param;
     }
-    return e->param;
+    memcpy(&param, &e->param, sizeof(param));
+    return param;
 }
 
 static uint64_t pauth_addpac(CPUARMState *env, uint64_t ptr, uint64_t modifier,
@@ -608,35 +602,25 @@ static int pauth_trap_target(CPUARMState *env, int el)
 /*
  * The answer depends only on the CPU, the EL, HCR_EL2 and SCR_EL3 — the
  * security state and every HCR bit read here come from those two registers —
- * so it is kept per thread and recomputed only when one of them has changed.
+ * so it is kept per CPU and recomputed only when one of them has changed.
  * Measured on an iPhone running a macOS guest, the check was 2-3 % of all
  * CPU time: EL2-enabled asks for the security state out of line on every
  * signed call and return, although the answer never changes while macOS runs.
  */
-typedef struct PauthTrapCache {
-    CPUARMState *env;
-    uint64_t hcr;
-    uint64_t scr;
-    int el;
-    int target;
-} PauthTrapCache;
-
-static __thread PauthTrapCache pauth_trap_cache;
-
 static void pauth_check_trap(CPUARMState *env, int el, uintptr_t ra)
 {
-    PauthTrapCache *c = &pauth_trap_cache;
+    typeof(env->pauth_cache) *c = &env->pauth_cache;
 
-    if (c->env != env || c->el != el || c->hcr != env->cp15.hcr_el2
-        || c->scr != env->cp15.scr_el3) {
-        c->target = pauth_trap_target(env, el);
-        c->env = env;
-        c->el = el;
-        c->hcr = env->cp15.hcr_el2;
-        c->scr = env->cp15.scr_el3;
+    if (!c->trap_valid || c->trap_el != el || c->trap_hcr != env->cp15.hcr_el2
+        || c->trap_scr != env->cp15.scr_el3) {
+        c->trap_target = pauth_trap_target(env, el);
+        c->trap_el = el;
+        c->trap_hcr = env->cp15.hcr_el2;
+        c->trap_scr = env->cp15.scr_el3;
+        c->trap_valid = true;
     }
-    if (c->target) {
-        pauth_trap(env, c->target, ra);
+    if (c->trap_target) {
+        pauth_trap(env, c->trap_target, ra);
     }
 }
 

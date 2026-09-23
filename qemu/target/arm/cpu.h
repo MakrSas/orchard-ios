@@ -792,6 +792,28 @@ typedef struct CPUArchState {
      */
     bool event_register;
 
+    /*
+     * What the PAC helpers (tcg/pauth_helper.c) remember between calls. Here
+     * rather than thread-local: on iOS a thread-local in a dylib costs a call
+     * on every access. Cleared by reset, which invalidates it; `param` holds
+     * an ARMVAParameters, which is not visible from this header.
+     */
+    struct {
+        uint64_t trap_hcr;
+        uint64_t trap_scr;
+        int trap_el;
+        int trap_target;
+        bool trap_valid;
+        struct {
+            uint64_t tcr;
+            uint32_t param;
+            int mmu_idx;
+            bool valid;
+            bool select;
+            bool data;
+        } va[16];
+    } pauth_cache;
+
     /* Fields up to this point are cleared by a CPU reset */
     struct {} end_reset_fields;
 

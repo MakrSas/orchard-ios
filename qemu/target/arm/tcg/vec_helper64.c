@@ -18,6 +18,9 @@
 #include "qemu/int128.h"
 #include "crypto/clmul.h"
 #include "vec_internal.h"
+#if defined(__aarch64__) && !HOST_BIG_ENDIAN
+#include <arm_neon.h>
+#endif
 
 DO_3OP(gvec_fdiv_h, float16_div, float16)
 DO_3OP(gvec_fdiv_s, float32_div, float32)
@@ -142,6 +145,48 @@ void HELPER(simd_tblx)(void *vd, void *vm, CPUARMState *env, uint32_t desc)
         uint8_t b[16];
         uint64_t d[2];
     } result;
+
+#if defined(__aarch64__) && !HOST_BIG_ENDIAN
+    /*
+     * An arm64 host has the same instruction: the table is up to four
+     * consecutive Q registers (wrapping from V31 to V0) and an index past its
+     * end yields zero for TBL and the old byte for TBX, exactly as here. The
+     * byte loop was 1-3 % of all CPU time on an iPhone running a macOS guest.
+     * For an 8-byte operation the top half is computed and then cleared.
+     */
+    {
+        uint8x16_t idx = vld1q_u8(indices);
+        uint8x16_t r;
+
+#define TBL_Q(k) vld1q_u8((const uint8_t *)aa64_vfp_qreg(env, (rn + (k)) % 32))
+        switch (table_len / 16) {
+        case 1: {
+            uint8x16_t t = TBL_Q(0);
+            r = is_tbx ? vqtbx1q_u8(vld1q_u8(vd), t, idx) : vqtbl1q_u8(t, idx);
+            break;
+        }
+        case 2: {
+            uint8x16x2_t t = { { TBL_Q(0), TBL_Q(1) } };
+            r = is_tbx ? vqtbx2q_u8(vld1q_u8(vd), t, idx) : vqtbl2q_u8(t, idx);
+            break;
+        }
+        case 3: {
+            uint8x16x3_t t = { { TBL_Q(0), TBL_Q(1), TBL_Q(2) } };
+            r = is_tbx ? vqtbx3q_u8(vld1q_u8(vd), t, idx) : vqtbl3q_u8(t, idx);
+            break;
+        }
+        default: {
+            uint8x16x4_t t = { { TBL_Q(0), TBL_Q(1), TBL_Q(2), TBL_Q(3) } };
+            r = is_tbx ? vqtbx4q_u8(vld1q_u8(vd), t, idx) : vqtbl4q_u8(t, idx);
+            break;
+        }
+        }
+#undef TBL_Q
+        vst1q_u8(vd, r);
+        clear_tail(vd, oprsz, simd_maxsz(desc));
+        return;
+    }
+#endif
 
     /*
      * We must construct the final result in a temp, lest the output

@@ -18,6 +18,19 @@
 #include "helper.h"
 #include "vec_internal.h"
 
+/*
+ * On an arm64 host with the SHA-256 extension (every Apple CPU iOS 16 runs
+ * on), the guest's SHA-256 instructions are the host's own, so they are run
+ * as such rather than modelled word by word. A macOS guest hashes every code
+ * page it maps to check its signature, and on an iPhone these four helpers
+ * were 2-4 % of all CPU time. The element order is the same on both sides:
+ * word i of a Q register is bytes 4i..4i+3 of the little-endian vector.
+ */
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SHA2)
+#include <arm_neon.h>
+#define HOST_SHA256 1
+#endif
+
 union CRYPTO_STATE {
     uint8_t    bytes[16];
     uint32_t   words[4];
@@ -404,6 +417,11 @@ static uint32_t s1(uint32_t x)
 
 void HELPER(crypto_sha256h)(void *vd, void *vn, void *vm, uint32_t desc)
 {
+#ifdef HOST_SHA256
+    vst1q_u32(vd, vsha256hq_u32(vld1q_u32(vd), vld1q_u32(vn), vld1q_u32(vm)));
+    clear_tail_16(vd, desc);
+    return;
+#endif
     uint64_t *rd = vd;
     uint64_t *rn = vn;
     uint64_t *rm = vm;
@@ -439,6 +457,11 @@ void HELPER(crypto_sha256h)(void *vd, void *vn, void *vm, uint32_t desc)
 
 void HELPER(crypto_sha256h2)(void *vd, void *vn, void *vm, uint32_t desc)
 {
+#ifdef HOST_SHA256
+    vst1q_u32(vd, vsha256h2q_u32(vld1q_u32(vd), vld1q_u32(vn), vld1q_u32(vm)));
+    clear_tail_16(vd, desc);
+    return;
+#endif
     uint64_t *rd = vd;
     uint64_t *rn = vn;
     uint64_t *rm = vm;
@@ -466,6 +489,11 @@ void HELPER(crypto_sha256h2)(void *vd, void *vn, void *vm, uint32_t desc)
 
 void HELPER(crypto_sha256su0)(void *vd, void *vm, uint32_t desc)
 {
+#ifdef HOST_SHA256
+    vst1q_u32(vd, vsha256su0q_u32(vld1q_u32(vd), vld1q_u32(vm)));
+    clear_tail_16(vd, desc);
+    return;
+#endif
     uint64_t *rd = vd;
     uint64_t *rm = vm;
     union CRYPTO_STATE d = { .l = { rd[0], rd[1] } };
@@ -484,6 +512,11 @@ void HELPER(crypto_sha256su0)(void *vd, void *vm, uint32_t desc)
 
 void HELPER(crypto_sha256su1)(void *vd, void *vn, void *vm, uint32_t desc)
 {
+#ifdef HOST_SHA256
+    vst1q_u32(vd, vsha256su1q_u32(vld1q_u32(vd), vld1q_u32(vn), vld1q_u32(vm)));
+    clear_tail_16(vd, desc);
+    return;
+#endif
     uint64_t *rd = vd;
     uint64_t *rn = vn;
     uint64_t *rm = vm;
