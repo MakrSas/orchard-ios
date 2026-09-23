@@ -1,0 +1,43 @@
+Subject: [PATCH] device: drain an autorelease pool around every C ABI entry
+
+Every call into this device from QEMU runs on one of QEMU's threads, and none
+of them has an autorelease pool that is ever drained. Every object Metal hands
+back autoreleased — command buffers, encoders, descriptors, and the resources
+they keep alive — therefore lived for the rest of the process.
+
+On a desktop that is a slow leak nobody hits. On an iPhone, under a 3 GB limit
+with 2 GB of it the guest's RAM, it was the whole budget: IOAccelerator memory
+went 20 -> 279 MB in the minutes after the login window came up while every
+cache this device keeps stayed under 5 MB, and the system killed the app.
+
+`unwind_safe` is the one function every entry runs through, so the pool goes
+there, on Apple hosts only.
+
+diff --git a/crates/reims-vgpu/src/device/mod.rs b/crates/reims-vgpu/src/device/mod.rs
+index 5be4a40a..f1efd0ab 100644
+--- a/crates/reims-vgpu/src/device/mod.rs
++++ b/crates/reims-vgpu/src/device/mod.rs
+@@ -828,6 +828,23 @@ where
+     F: FnOnce() -> T + std::panic::UnwindSafe,
+ {
+     crate::observe::panic::arm();
++    // Every entry drains its own autorelease pool on an Apple host. The threads
++    // that call in are QEMU's, and none of them has a pool that is ever drained,
++    // so every object Metal hands back autoreleased — command buffers, encoders,
++    // descriptors, and whatever they keep alive — outlived its call for the life
++    // of the process. Measured on an iPhone: IOAccelerator memory 20 → 279 MB
++    // in the minutes after the login window came up, with every cache this
++    // device keeps under 5 MB, and the app killed at its memory limit.
++    #[cfg(target_vendor = "apple")]
++    return objc::rc::autoreleasepool(|| run_entry(entry, f, on_panic));
++    #[cfg(not(target_vendor = "apple"))]
++    run_entry(entry, f, on_panic)
++}
++
++fn run_entry<T, F>(entry: &'static str, f: F, on_panic: T) -> T
++where
++    F: FnOnce() -> T + std::panic::UnwindSafe,
++{
+     match catch_unwind(AssertUnwindSafe(f)) {
+         Ok(v) => v,
+         Err(payload) => {

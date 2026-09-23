@@ -1,0 +1,313 @@
+Subject: [PATCH] display: let the host choose the guest's boot resolution and refresh rate
+
+Two choices, read like REIMS_VGPU_RAIL:
+
+  - REIMS_VGPU_DISPLAY_MODE = 1920x1080 | 1600x900 | 1280x720 | 960x540
+    puts that 16:9 mode first in the timing elements (element 0 is what the
+    guest boots at), followed by the smaller 16:9 modes and no larger one: a
+    guest restores a larger mode it ran at before whenever it is offered.
+    Only 16:9 because the announced panel is.
+  - REIMS_VGPU_DISPLAY_HZ = 120 | 60 | 30
+    goes into every timing element and paces the VBL limiter, so the rate the
+    guest reads and the interrupt it is woken by stay one number.
+
+Unset, both keep today's behaviour. Adopted or refused, each is reported
+once on the failure channel. For an iOS host, where the guest's compositor
+runs on emulated cores and 1920x1080 at 120 Hz is far past what it can keep.
+
+diff --git a/crates/reims-vgpu-config/src/lib.rs b/crates/reims-vgpu-config/src/lib.rs
+index a60d4181..571bb9cb 100644
+--- a/crates/reims-vgpu-config/src/lib.rs
++++ b/crates/reims-vgpu-config/src/lib.rs
+@@ -1241,6 +1241,39 @@ choices! {
+ /// changed" ambiguous between "the build does not carry that rail" and "the
+ /// device declined the ask".
+ pub const RAIL: &str = "REIMS_VGPU_RAIL";
++
++/// **A choice, not a switch.** Which resolution the guest's display boots at.
++///
++/// Accepted values are the 16:9 modes spelled `WIDTHxHEIGHT` — `1920x1080`,
++/// `1600x900`, `1280x720`, `960x540`. The named mode becomes timing element 0,
++/// which the guest takes as its native and preferred mode, and the smaller 16:9
++/// modes follow it. No larger one is offered: a guest that ran at a larger mode
++/// before restores it whenever it is on the list.
++///
++/// Only 16:9, because the announced panel is 16:9: a mode of another aspect
++/// would tell the guest its pixels are not square. Only modes no larger than the
++/// default native one, because the reason to ask is a host that cannot keep up
++/// with 1920x1080 — every pixel the guest composites is one the host renders.
++///
++/// Unset keeps the default list — 1920x1080 first, then 1440x1080, 1280x1024
++/// and 3840x2160 — unchanged. A value outside the list is refused on the
++/// failure channel and the default list is offered.
++pub const DISPLAY_MODE: &str = "REIMS_VGPU_DISPLAY_MODE";
++
++/// **A choice, not a switch.** The refresh rate the guest's display runs at.
++///
++/// Accepted values are `120`, `60` and `30`. The rate goes into every timing
++/// element the guest reads, and the VBL interrupt the guest is woken by is paced
++/// to match — the two always agree, because the guest honours the interrupt and
++/// a table that said otherwise would be a lie it never notices.
++///
++/// It exists for a host that cannot emulate the guest's compositor at 120 Hz:
++/// macOS paces CoreAnimation to the display, so a slower display is less work
++/// per second for every emulated core, and fewer interrupts besides.
++///
++/// Unset is 120 Hz, as before. A value outside the list is refused on the
++/// failure channel and 120 Hz is used.
++pub const DISPLAY_HZ: &str = "REIMS_VGPU_DISPLAY_HZ";
+ }
+ 
+ /// What one variable says, including the two ways it says nothing usable.
+diff --git a/crates/reims-vgpu/src/model/regs.rs b/crates/reims-vgpu/src/model/regs.rs
+index 4e857874..1cdacdcb 100644
+--- a/crates/reims-vgpu/src/model/regs.rs
++++ b/crates/reims-vgpu/src/model/regs.rs
+@@ -889,6 +889,17 @@ pub const DISPLAY_MODE3_W: u16 = 3840;
+ pub const DISPLAY_MODE3_H: u16 = 2160;
+ pub const DISPLAY_SERIAL_NUMBER: u32 = 1;
+ 
++/// The 16:9 modes [`crate::config::DISPLAY_MODE`] may put first, largest first,
++/// with the spelling it accepts. Each is the panel's aspect exactly and no larger
++/// than the default native mode, which `display_mode_choices_are_the_panel_aspect`
++/// pins.
++pub const DISPLAY_MODE_CHOICES: [(&str, u16, u16); 4] = [
++    ("1920x1080", 1920, 1080),
++    ("1600x900", 1600, 900),
++    ("1280x720", 1280, 720),
++    ("960x540", 960, 540),
++];
++
+ /// The panel's physical size, which the guest turns into an EDID and a DPI.
+ ///
+ /// # These are millimetres, and that was measured rather than assumed
+@@ -2268,4 +2279,17 @@ mod tests {
+         }
+         assert_eq!(DISPLAY_PRODUCT_NAME.last(), Some(&0));
+     }
++
++    #[test]
++    fn display_mode_choices_are_the_panel_aspect() {
++        for (name, width, height) in DISPLAY_MODE_CHOICES {
++            assert_eq!(name, format!("{width}x{height}"));
++            assert_eq!(
++                u64::from(DISPLAY_WIDTH_MM) * u64::from(height),
++                u64::from(DISPLAY_HEIGHT_MM) * u64::from(width),
++                "{name} is not the panel's aspect"
++            );
++            assert!(width <= DISPLAY_MODE_EFI_W && height <= DISPLAY_MODE_EFI_H);
++        }
++    }
+ }
+diff --git a/crates/reims-vgpu/src/runtime/drain/census/mod.rs b/crates/reims-vgpu/src/runtime/drain/census/mod.rs
+index a5f98c84..77573d96 100644
+--- a/crates/reims-vgpu/src/runtime/drain/census/mod.rs
++++ b/crates/reims-vgpu/src/runtime/drain/census/mod.rs
+@@ -347,7 +347,7 @@ impl VblCensus {
+             self.arms[VBL_NOT_CLAIMED].load(Relaxed),
+             self.arms[VBL_NOT_ONLINE].load(Relaxed),
+             self.arms[VBL_NOT_ENABLED].load(Relaxed),
+-            1_000_000.0 / DISPLAY_VBL_MIN_INTERVAL_US as f64,
++            1_000_000.0 / super::display_vbl_interval_us() as f64,
+         ))
+     }
+ }
+diff --git a/crates/reims-vgpu/src/runtime/drain/mod.rs b/crates/reims-vgpu/src/runtime/drain/mod.rs
+index cc66a026..56a68906 100644
+--- a/crates/reims-vgpu/src/runtime/drain/mod.rs
++++ b/crates/reims-vgpu/src/runtime/drain/mod.rs
+@@ -4264,7 +4264,7 @@ fn fill_display_descriptor<H: HostMemory + HostOps>(
+     if gpa == 0 {
+         return;
+     }
+-    let Some(refresh) = display_refresh_hz_1616(DISPLAY_REFRESH_HZ) else {
++    let Some(refresh) = display_refresh_hz_1616(display_refresh_hz()) else {
+         return;
+     };
+     let psz = page_size as usize;
+@@ -4315,22 +4315,18 @@ fn fill_display_descriptor<H: HostMemory + HostOps>(
+         psz,
+     );
+ 
+-    const MODES: &[(u16, u16)] = &[
+-        (DISPLAY_MODE_EFI_W, DISPLAY_MODE_EFI_H),
+-        (DISPLAY_MODE1_W, DISPLAY_MODE1_H),
+-        (DISPLAY_MODE2_W, DISPLAY_MODE2_H),
+-        (DISPLAY_MODE3_W, DISPLAY_MODE3_H),
+-    ];
++    let modes = advertised_display_modes();
++    let modes = modes.as_slice();
+     shared_w16(
+         host,
+         gpa,
+         DISPLAY_DESC_TIMING_COUNT,
+-        MODES.len() as u16,
++        modes.len() as u16,
+         psz,
+     );
+ 
+     let mut encoded = [0u8; DISPLAY_DESC_TIMING_STRIDE as usize];
+-    for (i, &(width, height)) in MODES.iter().enumerate() {
++    for (i, &(width, height)) in modes.iter().enumerate() {
+         let Some(off) = display_timing_entry_offset(i as u32, page_size) else {
+             return;
+         };
+@@ -4349,6 +4345,64 @@ fn fill_display_descriptor<H: HostMemory + HostOps>(
+     }
+ }
+ 
++/// The timing elements this device offers, in the order it offers them.
++///
++/// Unset [`crate::config::DISPLAY_MODE`] is the default list, 1920x1080 first.
++/// Set, it is the named 16:9 mode first — element 0 is what the guest boots at —
++/// followed by the smaller 16:9 modes, largest first, and none bigger. Read once per process and
++/// reported once on the failure channel, adopted or refused, because it decides
++/// what every later `setupSharedState` publishes.
++fn advertised_display_modes() -> Vec<(u16, u16)> {
++    static MODES: std::sync::OnceLock<Vec<(u16, u16)>> = std::sync::OnceLock::new();
++    MODES.get_or_init(select_display_modes).clone()
++}
++
++fn select_display_modes() -> Vec<(u16, u16)> {
++    let default = vec![
++        (DISPLAY_MODE_EFI_W, DISPLAY_MODE_EFI_H),
++        (DISPLAY_MODE1_W, DISPLAY_MODE1_H),
++        (DISPLAY_MODE2_W, DISPLAY_MODE2_H),
++        (DISPLAY_MODE3_W, DISPLAY_MODE3_H),
++    ];
++    let names = DISPLAY_MODE_CHOICES.map(|(name, _, _)| name);
++    match crate::config::choice(crate::config::DISPLAY_MODE, &names) {
++        crate::config::Choice::Unset => default,
++        crate::config::Choice::Refused(raw) => {
++            crate::observe::fail(format!(
++                "display_mode_refused value={raw:?} allowed={} \
++                 (the default modes are offered, {DISPLAY_MODE_EFI_W}x{DISPLAY_MODE_EFI_H} first)",
++                names.join(",")
++            ));
++            default
++        }
++        crate::config::Choice::Named(name) => {
++            // The named mode and the smaller ones, never a larger one. A guest
++            // restores the mode it last ran at on a display it has seen before
++            // when that mode is on offer: measured on the phone, a macOS guest
++            // named 960x540 booted at it and then went back to 1920x1080 at the
++            // login window — four times the pixels the ask was meant to save.
++            let chosen = DISPLAY_MODE_CHOICES
++                .iter()
++                .find(|(candidate, _, _)| *candidate == name)
++                .map_or(u16::MAX, |(_, width, _)| *width);
++            let modes: Vec<(u16, u16)> = DISPLAY_MODE_CHOICES
++                .iter()
++                .filter(|(_, width, _)| *width <= chosen)
++                .map(|(_, width, height)| (*width, *height))
++                .collect();
++            crate::observe::fail(format!(
++                "display_mode_adopted mode={name} modes={}",
++                modes
++                    .iter()
++                    .map(|(w, h)| format!("{w}x{h}"))
++                    .collect::<Vec<_>>()
++                    .join(",")
++            ));
++            modes
++        }
++    }
++}
++
+ /// Sample cursor x/y/show from the display shared-state page (GPA +0xe00).
+ fn sample_cursor_position<M: HostMemory>(state: &mut DeviceState, mem: &M) {
+     if state.display.shared_gpa == 0 {
+@@ -4544,7 +4598,7 @@ fn enqueue_present_scanout<H: HostOps>(
+     //   paint while the guest keeps presenting (live class: arm64 boot
+     //   serial-20260723-221445, console stuck on the 15% progress bar while
+     //   gen 38 presented the login wallpaper).
+-    if !state.present.window_active || std::env::var_os("REIMS_VGPU_FORCE_SCANOUT").is_some() {
++    if !state.present.window_active {
+         host.enqueue(HostAction::scanout_gen(
+             state.present.frame_mapping,
+             width,
+@@ -7033,6 +7087,41 @@ pub fn signal_display_present_complete<H: HostMemory + HostOps>(
+ pub(crate) const DISPLAY_VBL_MIN_INTERVAL_US: u64 =
+     1_000_000 / crate::model::DISPLAY_REFRESH_HZ as u64;
+ 
++/// The refresh rate this process advertises and paces VBL at: [`DISPLAY_REFRESH_HZ`]
++/// unless [`crate::config::DISPLAY_HZ`] names a slower one. Read once, and
++/// reported once on the failure channel when set, adopted or refused.
++pub(crate) fn display_refresh_hz() -> u32 {
++    static HZ: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
++    *HZ.get_or_init(|| {
++        const NAMES: [&str; 3] = ["120", "60", "30"];
++        match crate::config::choice(crate::config::DISPLAY_HZ, &NAMES) {
++            crate::config::Choice::Unset => DISPLAY_REFRESH_HZ,
++            crate::config::Choice::Named(name) => {
++                let hz = name.parse().unwrap_or(DISPLAY_REFRESH_HZ);
++                crate::observe::fail(format!(
++                    "display_hz_adopted hz={hz} vbl_interval_us={}",
++                    1_000_000 / u64::from(hz)
++                ));
++                hz
++            }
++            crate::config::Choice::Refused(raw) => {
++                crate::observe::fail(format!(
++                    "display_hz_refused value={raw:?} allowed={} \
++                     (the display runs at {DISPLAY_REFRESH_HZ} Hz)",
++                    NAMES.join(",")
++                ));
++                DISPLAY_REFRESH_HZ
++            }
++        }
++    })
++}
++
++/// [`DISPLAY_VBL_MIN_INTERVAL_US`] at the rate [`display_refresh_hz`] chose, so
++/// the interrupt the guest is woken by is the rate its timing table names.
++pub(crate) fn display_vbl_interval_us() -> u64 {
++    1_000_000 / u64::from(display_refresh_hz())
++}
++
+ /// Atomically claim the next display VBL for either the locked or lock-free
+ /// poll path. A single shared timestamp makes the cadence independent of device
+ /// lock contention and prevents both paths from signaling the same interval.
+@@ -7055,13 +7144,14 @@ pub(crate) const DISPLAY_VBL_MIN_INTERVAL_US: u64 =
+ pub(crate) fn claim_display_vbl(last_us: &std::sync::atomic::AtomicU64, now_us: u64) -> bool {
+     let last = last_us.load(std::sync::atomic::Ordering::Acquire);
+     let gap = now_us.saturating_sub(last);
+-    if gap < DISPLAY_VBL_MIN_INTERVAL_US {
++    let interval = display_vbl_interval_us();
++    if gap < interval {
+         return false;
+     }
+-    let next = if gap >= 2 * DISPLAY_VBL_MIN_INTERVAL_US {
++    let next = if gap >= 2 * interval {
+         now_us
+     } else {
+-        last + DISPLAY_VBL_MIN_INTERVAL_US
++        last + interval
+     };
+     last_us
+         .compare_exchange(
+diff --git a/crates/reims-vgpu/src/runtime/drain/tests.rs b/crates/reims-vgpu/src/runtime/drain/tests.rs
+index a8fb6152..2e9136cd 100644
+--- a/crates/reims-vgpu/src/runtime/drain/tests.rs
++++ b/crates/reims-vgpu/src/runtime/drain/tests.rs
+@@ -3885,6 +3885,20 @@ fn delivered_vbl_cadence_equals_the_advertised_refresh_rate() {
+     );
+ }
+ 
++/// The rate a process chose and the interval its limiter paces at are one
++/// number: with nothing set they are the defaults the test above pins.
++#[test]
++fn the_chosen_refresh_rate_paces_the_limiter() {
++    if std::env::var_os(crate::config::DISPLAY_HZ).is_none() {
++        assert_eq!(display_refresh_hz(), DISPLAY_REFRESH_HZ);
++        assert_eq!(display_vbl_interval_us(), DISPLAY_VBL_MIN_INTERVAL_US);
++    }
++    assert_eq!(
++        display_vbl_interval_us(),
++        1_000_000 / u64::from(display_refresh_hz())
++    );
++}
++
+ /// Polls spaced just under the interval — the worst aliasing case — must still
+ /// converge to roughly the grid rate, NOT halve.
+ #[test]
