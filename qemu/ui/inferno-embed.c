@@ -267,7 +267,15 @@ InfernoFrameResult inferno_display_read(void* dst, size_t dst_size, InfernoFrame
     info->generation = d->generation;
 
     need = (size_t)width * height * 4;
-    if (dst == NULL || dst_size < need) {
+    /*
+     * Any size but the exact one is a resize, not only a smaller one. The
+     * caller sizes its buffer to the frame it was last told of, so a buffer
+     * that is too big means the screen shrank: the guest going from its boot
+     * framebuffer to a 960x540 desktop, say. Taken as it was, rows of the new
+     * width were laid out at the old one — two copies of the picture side by
+     * side, squeezed into the top of the screen.
+     */
+    if (dst == NULL || dst_size != need) {
         /* Report the whole screen: the caller is about to start from nothing. */
         info->w = width;
         info->h = height;
@@ -368,6 +376,47 @@ void inferno_input_key_hid(uint32_t usage, bool pressed)
 
     bql_lock();
     qemu_input_event_send_key_linux(inferno_dcl.con, lnx, pressed);
+    bql_unlock();
+}
+
+/*
+ * One whole keystroke: the modifiers in `mods` (bit 0 Shift, bit 1 Command)
+ * held around a press and release of `usage`, all queued under one BQL.
+ *
+ * The on-screen keyboard used to send each of these as its own call, and each
+ * took the BQL for itself. Under a busy guest the BQL can be held for hundreds
+ * of milliseconds, so the release reached the keyboard's queue that much after
+ * the press: the guest saw the key held past its repeat delay and repeated it.
+ * Measured on the phone, every letter and every backspace came out twice.
+ * Queued together, the release is behind the press in the same queue and the
+ * guest reads it on its next poll.
+ */
+void inferno_input_key_tap(uint32_t usage, uint32_t mods)
+{
+    static const uint32_t modifier_usage[] = { 0xE1 /* LeftShift */, 0xE3 /* LeftGUI */ };
+    unsigned int lnx, mod_lnx[2];
+    int i;
+
+    if (usage >= qemu_input_map_usb_to_linux_len) { return; }
+    lnx = qemu_input_map_usb_to_linux[usage];
+    if (lnx == 0) { return; }
+    for (i = 0; i < 2; i++) {
+        mod_lnx[i] = qemu_input_map_usb_to_linux[modifier_usage[i]];
+    }
+
+    bql_lock();
+    for (i = 0; i < 2; i++) {
+        if ((mods & (1u << i)) && mod_lnx[i]) {
+            qemu_input_event_send_key_linux(inferno_dcl.con, mod_lnx[i], true);
+        }
+    }
+    qemu_input_event_send_key_linux(inferno_dcl.con, lnx, true);
+    qemu_input_event_send_key_linux(inferno_dcl.con, lnx, false);
+    for (i = 1; i >= 0; i--) {
+        if ((mods & (1u << i)) && mod_lnx[i]) {
+            qemu_input_event_send_key_linux(inferno_dcl.con, mod_lnx[i], false);
+        }
+    }
     bql_unlock();
 }
 

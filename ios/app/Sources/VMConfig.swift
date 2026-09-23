@@ -139,10 +139,8 @@ struct VMConfig {
         // A core started by PSCI CPU_ON gets the keys the firmware would have
         // left it; without this every secondary faults on its first check.
         "ORCHARD_PAC_INHERIT": "1",
-        // Put the boot framebuffer on screen as well as the composited
-        // desktop: the Apple logo and progress bar come long before the
-        // guest's own graphics stack draws anything.
-        "REIMS_VGPU_FORCE_SCANOUT": "1",
+        // No REIMS_VGPU_FORCE_SCANOUT, which scripts/run-vm.sh still sets:
+        // reims-vgpu no longer reads it anywhere.
     ]
 
     /// The scratch namespace both sides reach: the app writes bytes into this

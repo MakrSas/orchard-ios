@@ -57,8 +57,9 @@ typedef enum InfernoFrameResult
     /* The damaged rows were copied; the rectangle says which. */
     INFERNO_FRAME_OK = 1,
     /*
-     * The destination is too small, which is how a change of resolution
-     * arrives. The size in the info is the new one; allocate and call again.
+     * The destination is not exactly one frame, which is how a change of
+     * resolution arrives — larger or smaller. The size in the info is the new
+     * one; allocate exactly that and call again.
      */
     INFERNO_FRAME_RESIZE = 2,
 } InfernoFrameResult;
@@ -134,6 +135,8 @@ void inferno_input_function_key(uint32_t number, bool pressed);
  * addition: Inferno's iPhone guest has no keyboard.
  */
 void inferno_input_key_hid(uint32_t usage, bool pressed);
+/* A whole keystroke under one BQL: `mods` bit 0 Shift, bit 1 Command. */
+void inferno_input_key_tap(uint32_t usage, uint32_t mods);
 
 #ifdef __cplusplus
 }

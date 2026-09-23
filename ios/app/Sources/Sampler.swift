@@ -1,13 +1,11 @@
 import Foundation
 import Darwin
 
-/// Finds the thread that is burning CPU and reports where it is executing.
+/// Finds the threads that are burning CPU and reports where they execute.
 ///
-/// One core pinned with nothing else happening has two very different causes:
-/// the guest spinning inside translated code, or the emulator itself stuck in a
-/// loop. The program counter separates them — `dladdr` names the function when
-/// the address belongs to a loaded image, and returns nothing when it points
-/// into a JIT buffer.
+/// The program counter says what the time is spent on — `dladdr` names the
+/// function when the address belongs to a loaded image, and returns nothing
+/// when it points into the JIT buffer, which is the guest's own code.
 enum Sampler {
     private static func cpuTime(_ thread: thread_t) -> Double? {
         var info = thread_basic_info()
@@ -34,40 +32,81 @@ enum Sampler {
         return state.__pc
     }
 
-    private static func describe(_ pc: UInt64) -> String {
-        var info = Dl_info()
-        guard dladdr(UnsafeRawPointer(bitPattern: UInt(pc)), &info) != 0 else {
-            return String(format: L("0x%llx — вне загруженных образов (код, сгенерированный транслятором)"), pc)
-        }
-        let image = info.dli_fname.map { String(cString: $0) } ?? "?"
-        let symbol = info.dli_sname.map { String(cString: $0) } ?? "?"
-        let offset = pc - UInt64(UInt(bitPattern: info.dli_saddr))
-        return String(format: "0x%llx — %@ +%llu  (%@)", pc, symbol, offset,
-                      (image as NSString).lastPathComponent)
-    }
-
-    /// Samples the busiest thread a few times: a moving PC means it is running
-    /// a loop, a fixed one means it is wedged on a single instruction.
+    /// A profile of the emulator's busy threads: every thread that burned a
+    /// fifth of a core or more is sampled every 10 ms for four seconds, and
+    /// the samples are counted by function. The share is of all samples, so
+    /// two busy vCPU threads each contribute half.
+    ///
+    /// The four samples this used to take named a function or two and could
+    /// not say how much of the time went there; a few hundred can, which is
+    /// what deciding where to speed the emulator up needs.
     static func report(_ completion: @escaping (String) -> Void) {
         Thread.detachNewThread {
-            guard let busiest = findBusiest() else {
+            let busy = busyThreads()
+            guard !busy.isEmpty else {
                 return completion(L("Пробник: не удалось определить занятый поток"))
             }
-
-            var lines = [L("Где крутится поток (%d замеров):", busiest.samples)]
-            var seen = Set<UInt64>()
-            for pc in busiest.pcs {
-                seen.insert(pc)
-                lines.append("  " + describe(pc))
+            var bySymbol: [String: Int] = [:]
+            var byGroup: [String: Int] = [:]
+            var total = 0
+            let deadline = Date().addingTimeInterval(4)
+            while Date() < deadline {
+                for thread in busy {
+                    guard thread_suspend(thread) == KERN_SUCCESS else { continue }
+                    let pc = programCounter(thread)
+                    thread_resume(thread)
+                    guard let pc else { continue }
+                    let name = symbol(pc)
+                    bySymbol[name, default: 0] += 1
+                    byGroup[group(name), default: 0] += 1
+                    total += 1
+                }
+                Thread.sleep(forTimeInterval: 0.01)
             }
-            lines.append(seen.count == 1
-                ? L("  адрес не меняется — поток стоит на одной инструкции")
-                : L("  адрес меняется — поток исполняет цикл"))
+            guard total > 0 else { return completion(L("Пробник: не удалось определить занятый поток")) }
+            let percent = { (n: Int) in String(format: "%.1f%%", Double(n) * 100 / Double(total)) }
+            var lines = [L("Профиль: %d замеров, потоков: %d", total, busy.count)]
+            lines.append("  " + byGroup.sorted { $0.value > $1.value }
+                .map { "\($0.key) \(percent($0.value))" }.joined(separator: " · "))
+            for (name, n) in bySymbol.sorted(by: { $0.value > $1.value }).prefix(15) {
+                lines.append("  \(percent(n))  \(name)")
+            }
             completion(lines.joined(separator: "\n"))
         }
     }
 
-    private static func findBusiest() -> (samples: Int, pcs: [UInt64])? {
+    /// The function a PC is in, or the translator's buffer when it is in none.
+    private static func symbol(_ pc: UInt64) -> String {
+        var info = Dl_info()
+        guard dladdr(UnsafeRawPointer(bitPattern: UInt(pc)), &info) != 0,
+              let name = info.dli_sname
+        else { return L("[код гостя, переведённый JIT]") }
+        return String(cString: name)
+    }
+
+    /// Where a function belongs, by the prefixes QEMU's own sources use.
+    private static func group(_ name: String) -> String {
+        if name.hasPrefix("[") { return L("код гостя") }
+        let groups: [(String, [String])] = [
+            ("PAC", ["pauth_", "helper_pac", "helper_aut", "helper_xpac", "qemu_xxhash", "aa64_va_parameters"]),
+            (L("адреса/TLB"), ["get_phys_addr", "probe_access", "tlb_", "cputlb", "arm_ldq_ptw", "arm_ldl_ptw",
+                               "S1_ptw", "ptw_", "helper_le_", "helper_be_", "helper_ld", "helper_st",
+                               "get_S1prot", "regime_", "arm_cpu_tlb_fill", "do_ld", "do_st", "mmu_lookup"]),
+            (L("поиск блоков"), ["helper_lookup_tb_ptr", "tb_lookup", "tb_htable", "qht_", "curr_cflags"]),
+            (L("трансляция"), ["tcg_", "gen_", "translator_", "disas_", "aarch64_tr_", "tb_gen_code",
+                               "sys_icache_invalidate", "tb_flush", "tb_invalidate", "tb_phys"]),
+            (L("ожидание"), ["__psynch", "__semwait", "mach_msg", "__ulock", "qemu_cond", "qemu_mutex", "qemu_sem",
+                             "pthread_", "__select", "poll", "kevent"]),
+            (L("криптография гостя"), ["helper_crypto"]),
+            ("reims-vgpu", ["reims_vgpu", "_ZN10reims_vgpu", "_ZN"]),
+        ]
+        for (label, prefixes) in groups where prefixes.contains(where: { name.hasPrefix($0) }) {
+            return label
+        }
+        return L("прочее")
+    }
+
+    private static func busyThreads() -> [thread_t] {
         func threads() -> [thread_t] {
             var list: thread_act_array_t?
             var count: mach_msg_type_number_t = 0
@@ -86,24 +125,9 @@ enum Sampler {
             return (t, c)
         }
         Thread.sleep(forTimeInterval: 1)
-
-        var best: (thread_t, Double)?
-        for (t, was) in before {
-            guard let now = cpuTime(t) else { continue }
-            let delta = now - was
-            if delta > (best?.1 ?? 0.2) { best = (t, delta) }
+        return before.compactMap { t, was in
+            guard let now = cpuTime(t), now - was > 0.2 else { return nil }
+            return t
         }
-        guard let (target, _) = best else { return nil }
-
-        // Four snapshots, briefly suspending so the register state is coherent.
-        var pcs: [UInt64] = []
-        for _ in 0..<4 {
-            if thread_suspend(target) == KERN_SUCCESS {
-                if let pc = programCounter(target) { pcs.append(pc) }
-                thread_resume(target)
-            }
-            Thread.sleep(forTimeInterval: 0.2)
-        }
-        return pcs.isEmpty ? nil : (pcs.count, pcs)
     }
 }

@@ -1,0 +1,90 @@
+{
+  "features": [
+    "refractivity"
+  ],
+  "fill": {
+    "linear-gradient": [
+      "display-p3:0.96387,0.80273,0.44604,1.00000",
+      "display-p3:0.80273,0.45386,0.25024,1.00000"
+    ]
+  },
+  "groups": [
+    {
+      "blur-material": null,
+      "layers": [
+        {
+          "fill-specializations": [
+            {
+              "appearance": "dark",
+              "value": "none"
+            }
+          ],
+          "glass": true,
+          "hidden": false,
+          "image-name": "SVG Image.svg",
+          "name": "SVG Image"
+        }
+      ],
+      "position": {
+        "scale": 1.1,
+        "translation-in-points": [
+          0,
+          0
+        ]
+      },
+      "refractivity": {
+        "depth": 0,
+        "enabled": false,
+        "strength": 1
+      },
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.46
+      }
+    },
+    {
+      "blend-mode": "normal",
+      "blur-material": 0.21,
+      "layers": [
+        {
+          "fill": {
+            "solid": "srgb:0.00000,0.00000,0.00000,1.00000"
+          },
+          "image-name": "SVG Image 2.svg",
+          "name": "SVG Image 2"
+        }
+      ],
+      "opacity": 0.53,
+      "position": {
+        "scale": 1.1,
+        "translation-in-points": [
+          0,
+          0
+        ]
+      },
+      "refractivity": {
+        "depth": 0,
+        "enabled": false,
+        "strength": 0.6451171875
+      },
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.46
+      }
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

@@ -282,12 +282,33 @@ final class VMModel: ObservableObject {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
                     Sampler.report { LogCapture.shared.note($0) }
                 }
+                // And once the guest is at its login window or desktop, where
+                // the time that matters for frames goes.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 150) {
+                    Sampler.report { LogCapture.shared.note($0) }
+                }
             }
         }
         hasRun = true
         // The emulator appends to its console log rather than starting it
         // afresh (see VMConfig), so the run before is cleared away here.
         _ = truncate(VMConfig.guestConsoleLog.path, 0)
+        // reims-vgpu appends to its logs for the life of the file, not of the
+        // run, so a phone that had started the machine sixteen times handed
+        // over a 13 MB failure log of which this run was 0.7 MB. The run before
+        // is kept beside it as .prev, as emulator.log keeps its own.
+        let fm = FileManager.default
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+        for name in ["reims-vgpu-fail", "reims-vgpu-draw"] {
+            let log = tmp.appendingPathComponent(name + ".log")
+            let prev = tmp.appendingPathComponent(name + ".prev.log")
+            guard fm.fileExists(atPath: log.path) else { continue }
+            try? fm.removeItem(at: prev)
+            try? fm.moveItem(at: log, to: prev)
+            let published = VMConfig.documents.appendingPathComponent(name + ".prev.log")
+            try? fm.removeItem(at: published)
+            try? fm.copyItem(at: prev, to: published)
+        }
         // The machine's own switches win over the app's: they are what makes a
         // stock macOS kernel boot at all.
         QemuBridge.shared.environment = Settings.shared.emulatorEnvironment
@@ -1040,6 +1061,8 @@ final class VMModel: ObservableObject {
     }
 
     private var bootWatch: Timer?
+    private var memoryWatch: Timer?
+    private var memoryLogged: UInt64 = 0
 
     /// A line in the log every half minute saying where CPU0 is and how many
     /// cores run: the only progress report a macOS guest gives once iBoot has
@@ -1057,6 +1080,28 @@ final class VMModel: ObservableObject {
         // "invalid mode 'kCFRunLoopCommonModes'" on the first device run.
         RunLoop.main.add(timer, forMode: .common)
         bootWatch = timer
+
+        // The system kills the app outright when its footprint reaches the
+        // limit, with nothing in any log to say so. A line each time the
+        // footprint has grown by another 100 MB leaves the climb on record:
+        // the last one before the log stops is how close it got.
+        memoryWatch?.invalidate()
+        memoryLogged = 0
+        switch Threads.increasedMemoryLimitGranted() {
+        case true?:  LogCapture.shared.note(L("Повышенный лимит памяти: право выдано"))
+        case false?: LogCapture.shared.note(L("Повышенный лимит памяти: права нет — подпись установки его не сохранила"))
+        case nil:    LogCapture.shared.note(L("Повышенный лимит памяти: проверить не удалось"))
+        }
+        let memory = Timer(timeInterval: 5, repeats: true) { [weak self] timer in
+            guard let self, self.isRunning else { timer.invalidate(); return }
+            guard let bytes = Threads.footprintBytes(),
+                  bytes >= self.memoryLogged + 100 * 1_048_576 else { return }
+            self.memoryLogged = bytes
+            LogCapture.shared.note(L("Память: %@", Threads.memoryLine(footprint: bytes)))
+            LogCapture.shared.note("  " + Threads.regionBreakdown())
+        }
+        RunLoop.main.add(memory, forMode: .common)
+        memoryWatch = memory
     }
 
     /// reims-vgpu's own logs — the always-on failure channel above all, where
@@ -1487,8 +1532,8 @@ struct ScreenView: View {
     @ObservedObject var serial: SerialConsole
     @ObservedObject private var settings = Settings.shared
     @Binding var fullScreen: Bool
-    /// Whether the guest has the keyboard: the on-screen one, and a hardware
-    /// one's keys. See GuestKeyboard.swift.
+    /// Whether the app's own on-screen keyboard is showing. A hardware
+    /// keyboard reaches the guest either way. See GuestKeyboard.swift.
     @State private var keyboard = false
 
     /// How far the picture keeps from each edge.
@@ -1544,6 +1589,19 @@ struct ScreenView: View {
                     // At the native resolution there is nothing to interpolate;
                     // below it the picture is stretched to cover the same area,
                     // and whether that is smoothed is a matter of taste.
+                    #if canImport(UIKit)
+                    // Straight into a layer's contents, not through Image: an
+                    // Image of a new CGImage each frame left every one of them
+                    // in graphics memory — measured on the phone as 36 → 349 MB
+                    // of IOAccelerator in the thirty seconds 1920×1080 frames
+                    // were arriving, which is what the system killed the app
+                    // for. A layer lets go of the last frame when handed the
+                    // next.
+                    GuestPictureLayer(frame: frame, smooth: settings.smoothUpscale, radius: radius)
+                        .frame(width: box?.width, height: box?.height)
+                        .position(x: box?.midX ?? geo.size.width / 2,
+                                  y: box?.midY ?? geo.size.height / 2)
+                    #else
                     Image(decorative: frame, scale: 1.0)
                         .resizable()
                         .interpolation(settings.smoothUpscale ? .high : .none)
@@ -1555,6 +1613,7 @@ struct ScreenView: View {
                         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
                         .position(x: box?.midX ?? geo.size.width / 2,
                                   y: box?.midY ?? geo.size.height / 2)
+                    #endif
                     if settings.showFPS, let box {
                         // The console rate belongs here too: when the guest is
                         // pouring kernel log into the UART, the emulated cores
@@ -1586,7 +1645,18 @@ struct ScreenView: View {
                     }
             )
             #if canImport(UIKit)
-            .background(GuestKeyboard(active: $keyboard).frame(width: 1, height: 1))
+            // Always first responder while the machine runs, so a hardware
+            // keyboard reaches the guest without the button; it never brings
+            // up the system keyboard (see KeyCatcherView).
+            .background(GuestKeyboard(active: .constant(VMConfig.macGuest && model.isRunning))
+                .frame(width: 1, height: 1))
+            .overlay(alignment: .bottom) {
+                if VMConfig.macGuest, model.isRunning, keyboard {
+                    OnScreenKeyboard()
+                        .padding(.horizontal, 76)
+                        .padding(.bottom, 8)
+                }
+            }
             .overlay(alignment: .bottomLeading) {
                 if VMConfig.macGuest, model.isRunning {
                     Button {
@@ -2031,3 +2101,38 @@ struct TransferBanner: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }
+
+#if canImport(UIKit)
+/// The guest's picture as a layer's contents, replaced frame by frame.
+struct GuestPictureLayer: UIViewRepresentable {
+    let frame: CGImage
+    let smooth: Bool
+    let radius: CGFloat
+
+    final class View: UIView {
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            layer.contentsGravity = .resizeAspect
+            // Continuous, not circular: Apple's corners are squircles.
+            layer.cornerCurve = .continuous
+        }
+        required init?(coder: NSCoder) { fatalError("not used") }
+    }
+
+    func makeUIView(context: Context) -> View { View(frame: .zero) }
+
+    func updateUIView(_ view: View, context: Context) {
+        CATransaction.begin()
+        // No cross-fade between frames: it would keep two of them alive.
+        CATransaction.setDisableActions(true)
+        view.layer.contents = frame
+        let filter: CALayerContentsFilter = smooth ? .trilinear : .nearest
+        view.layer.magnificationFilter = filter
+        view.layer.minificationFilter = smooth ? .trilinear : .linear
+        view.layer.cornerRadius = radius
+        view.layer.masksToBounds = radius > 0
+        CATransaction.commit()
+    }
+}
+#endif

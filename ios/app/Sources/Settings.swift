@@ -15,23 +15,40 @@ final class Settings: ObservableObject {
         // A count saved while 2 and 3 were still on offer would otherwise
         // reach the command line, and leave the picker with nothing selected.
         if cores < Settings.coreChoices[0] { cores = Settings.coreChoices[0] }
+        // Likewise a memory size that is no longer offered: for a macOS guest
+        // anything under 2 GB boots its kernel into a silent reset loop.
+        if !Settings.memoryChoices.contains(where: { $0.value == memory }) {
+            memory = Settings.memoryChoices[0].value
+        }
     }
 
     // The machine
     @AppStorage("cores") var cores: Int = 4 {
         willSet { objectWillChange.send() }
     }
-    /// Nothing below 4: one core goes to the SEP, and with fewer than three
-    /// left beside it the SEP panics initialising its key store, so the guest
-    /// never boots. 2 and 3 used to be offered and only ever caught people out.
-    static let coreChoices = [4, 5, 7]
+    /// Nothing below 4 for an iPhone guest: one core goes to the SEP, and with
+    /// fewer than three left beside it the SEP panics initialising its key
+    /// store, so the guest never boots. A macOS guest has no SEP, and each of
+    /// its cores is a host thread competing for the phone's two fast cores
+    /// with the emulator's own threads and the display's, so 2 and 3 are on
+    /// offer there to find out whether fewer cores run faster.
+    static let coreChoices = VMConfig.macGuest ? [2, 3, 4, 5, 7] : [4, 5, 7]
     /// 1.5 GiB: a Ventura 13.6 guest has been measured reaching its desktop
     /// with that much under Virtualization.framework. Below the 4 GiB floor
     /// Virtualization.framework enforces for itself, which QEMU's machine does
     /// not share.
-    @AppStorage("memory") var memory: String = "1536M" {
+    @AppStorage("memory") var memory: String = VMConfig.macGuest ? "2G" : "1536M" {
         willSet { objectWillChange.send() }
     }
+    /// For a macOS guest nothing under 2 GB. Measured on the phone: at 1.5 and
+    /// 1.75 GB the kernel starts and the machine resets a few seconds later,
+    /// again and again — 17 passes through iBoot in two and a half minutes, no
+    /// panic on the console, no picture. At 2 GB it reaches the login window.
+    /// No 4 GB: past the process's own ceiling, the app is killed before the
+    /// guest gets anywhere.
+    static let memoryChoices: [(value: String, title: String)] = VMConfig.macGuest
+        ? [("2G", "2 ГБ"), ("2560M", "2.5 ГБ"), ("3G", "3 ГБ")]
+        : [("1G", "1 ГБ"), ("1536M", "1.5 ГБ"), ("1792M", "1.75 ГБ"), ("2G", "2 ГБ"), ("3G", "3 ГБ")]
     /// Left at the middle of the range on purpose. Bigger is faster — measured
     /// on the phone, 64 MB gave 8–11 frames a second and 256 gave 21–25 — but
     /// this buffer shares the process's three gigabytes with the guest's own
@@ -67,6 +84,30 @@ final class Settings: ObservableObject {
     @AppStorage("panel") var panel: String = GuestPanel.iphone11.rawValue {
         willSet { objectWillChange.send() }
     }
+    /// The resolution a macOS guest boots at, as `REIMS_VGPU_DISPLAY_MODE`
+    /// spells it. Empty keeps the device's own list, 1920×1080 first.
+    @AppStorage("guestResolution") var guestResolution: String = "" {
+        willSet { objectWillChange.send() }
+    }
+    /// What `guestResolution` may be: the 16:9 modes the device accepts, the
+    /// panel it announces being 16:9.
+    /// The guest display's refresh rate, as `REIMS_VGPU_DISPLAY_HZ` spells it.
+    /// macOS paces its compositor to the display, so a slower one is less work
+    /// for every emulated core. Empty keeps the device's 120 Hz.
+    @AppStorage("guestRefresh") var guestRefresh: String = "" {
+        willSet { objectWillChange.send() }
+    }
+    static let refreshChoices: [(value: String, title: String)] = [
+        ("", "120 Гц"),
+        ("60", "60 Гц"),
+        ("30", "30 Гц"),
+    ]
+    static let resolutionChoices: [(value: String, title: String)] = [
+        ("", "1920×1080"),
+        ("1600x900", "1600×900"),
+        ("1280x720", "1280×720"),
+        ("960x540", "960×540"),
+    ]
     /// Whether the guest's sound reaches the phone's speaker. Off by default:
     /// the samples are prepared by the same emulated cores that draw the screen.
     @AppStorage("guestAudio") var guestAudio: Bool = false {
@@ -173,6 +214,8 @@ final class Settings: ObservableObject {
         // device tree nodes cost boot time and idle CPU, so a machine started without sound carries none
         // of them.
         if guestAudio { env["INFERNO_AUDIO"] = "1" }
+        if !guestResolution.isEmpty { env["REIMS_VGPU_DISPLAY_MODE"] = guestResolution }
+        if !guestRefresh.isEmpty { env["REIMS_VGPU_DISPLAY_HZ"] = guestRefresh }
         return env
     }
 
@@ -414,6 +457,23 @@ private struct ScreenSettings: View {
 
     var body: some View {
         Form {
+            if VMConfig.macGuest {
+                Section {
+                    Picker(L("Разрешение"), selection: $settings.guestResolution) {
+                        ForEach(Settings.resolutionChoices, id: \.value) {
+                            Text($0.title).tag($0.value)
+                        }
+                    }
+                    Picker(L("Частота"), selection: $settings.guestRefresh) {
+                        ForEach(Settings.refreshChoices, id: \.value) {
+                            Text(L($0.title)).tag($0.value)
+                        }
+                    }
+                } footer: {
+                    Text(L("С каким разрешением загружается macOS. Каждый пиксель рабочего стола гость собирает на эмулируемых ядрах, а приложение потом рисует: у 1280×720 пикселей в 2¼ раза меньше, чем у 1920×1080, у 960×540 — вчетверо. Остальные режимы остаются в настройках самой macOS. Частота — сколько раз в секунду macOS перерисовывает экран и анимации: при 30 Гц этой работы вчетверо меньше, чем при 120. Применяется при запуске машины."))
+                }
+            }
+
             Section {
                 Picker(L("Панель"), selection: $settings.panel) {
                     ForEach(GuestPanel.allCases, id: \.rawValue) { panel in
@@ -596,22 +656,20 @@ private struct MachineSettings: View {
                 Text(L("Ядра"))
             } footer: {
                 Text(VMConfig.macGuest
-                     ? L("Все ядра достаются гостю. У iPhone 15 два производительных ядра и четыре энергоэффективных.")
+                     ? L("Все ядра достаются гостю. У iPhone 15 два производительных ядра и четыре энергоэффективных, а каждое ядро гостя — отдельный поток, которому приходится делить их с эмулятором и графикой. Поэтому 2–3 ядра могут оказаться быстрее 4: стоит сравнить.")
                      : L("Одно ядро уходит под SEP: при 4 гостю достаётся 3."))
             }
 
             Section {
                 Picker(L("Гостю"), selection: $settings.memory) {
-                    // No 4 GB: past the process's own ceiling, the app is
-                    // killed before the guest gets anywhere.
-                    ForEach([("1G", "1 ГБ"), ("1536M", "1.5 ГБ"), ("1792M", "1.75 ГБ"), ("2G", "2 ГБ"), ("3G", "3 ГБ")], id: \.0) {
-                        Text(L($0.1)).tag($0.0)
+                    ForEach(Settings.memoryChoices, id: \.value) {
+                        Text(L($0.title)).tag($0.value)
                     }
                 }
             } header: {
                 Text(L("Память"))
             } footer: {
-                Text(L("Потолок процесса на iPhone — около 3 ГиБ, и в него входит всё остальное, что держит приложение: буфер трансляций, графика, сам эмулятор. macOS Ventura доходит до рабочего стола и с 1.5 ГБ. Если приложение закрывается само через какое-то время после запуска — это iOS отбирает память, уменьшите её здесь."))
+                Text(L("Меньше 2 ГБ macOS не загружается: ядро стартует и через несколько секунд перезагружает машину, снова и снова. Потолок процесса на iPhone — около 3 ГиБ, и в него входит всё остальное, что держит приложение: буфер трансляций, графика, сам эмулятор. Если приложение закрывается само через какое-то время после запуска — это iOS отбирает память: уменьшите буфер трансляций. Насколько близко к потолку, пишется в emulator.log строками «Память»."))
             }
 
             Section {

@@ -153,7 +153,7 @@ cp -R "$KEYMAPS" "$APP/qemu-data/keymaps"
 # the Info.plist keys actool wants come back in a partial plist, merged
 # rather than transcribed so a change to the icon needs no change here.
 #
-#   Inferno.icon   — Icon Composer's bundle, iOS 26's Liquid Glass layers.
+#   Orchard.icon   — Icon Composer's bundle, iOS 26's Liquid Glass layers.
 #                    Only actool from Xcode 26+ can compile it.
 #   Assets.xcassets — a flat PNG catalog rendered from the same artwork,
 #                    for older Xcode. Works everywhere but does not get the
@@ -180,15 +180,16 @@ with open(target, 'wb') as f: plistlib.dump(info, f)
 PY
 }
 
-ICON="$ROOT/Resources/Inferno.icon"
+ICON="$ROOT/Resources/Orchard.icon"
+ICON_NAME=Orchard
 FALLBACK_ICON="$ROOT/Resources/Assets.xcassets"
 if [ -z "${INFERNO_NO_ICON:-}" ]; then
     # The probe compiles into the build directory, not /tmp, so nothing is left behind.
     mkdir -p "$BUILD/actool-probe"
     if [ -d "$ICON" ] && xcrun actool --version >/dev/null 2>&1 && \
-       xcrun actool --compile "$BUILD/actool-probe" --app-icon Inferno "$ICON" >"$BUILD/actool-probe.log" 2>&1; then
-        echo "==> Иконка (Icon Composer)"
-        compile_icon "$ICON" Inferno
+       xcrun actool --compile "$BUILD/actool-probe" --app-icon "$ICON_NAME" "$ICON" >"$BUILD/actool-probe.log" 2>&1; then
+        echo "==> Иконка (Icon Composer: $ICON_NAME)"
+        compile_icon "$ICON" "$ICON_NAME"
     elif [ -d "$FALLBACK_ICON" ]; then
         echo "==> Иконка (плоский .xcassets — Xcode тут старше 26, .icon не берёт)"
         compile_icon "$FALLBACK_ICON" AppIcon
