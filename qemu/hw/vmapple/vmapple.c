@@ -840,6 +840,10 @@ static const TypeInfo vmapple_machine_info = {
  *
  * Copyright (c) 2026 Youssef Elliethy (yaelliethy)
  */
+static GlobalProperty apple_vm_compat_defaults[] = {
+    { TYPE_XHCI_PCI, "conditional-intr-mapping", "on" },
+};
+
 static void apple_vm_machine_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -847,6 +851,19 @@ static void apple_vm_machine_class_init(ObjectClass *oc, const void *data)
     /* Parent (vmapple) class_init has already run; override only the CPU. */
     mc->default_cpu_type = TYPE_APPLE_VM_CPU;
     mc->desc = "Apple aarch64 Virtual Machine (Orchard, custom CPU)";
+
+    /*
+     * machine_class_base_init() gives every non-abstract machine class a
+     * fresh, empty compat_props array, so vmapple's table is NOT inherited.
+     * Without it the xHCI keeps interrupter mapping in pin (INTx) mode, and
+     * macOS's HID transfer events land on event rings 1/2, whose interrupts
+     * cannot be signalled over INTx: the guest only finds them when it sweeps
+     * all rings on the MFINDEX-wrap interrupt, every 2.048 s. Only the xHCI
+     * entry is taken over: virtio-pci disable-legacy would change the
+     * virtio-net device ID an installed guest already knows.
+     */
+    compat_props_add(mc->compat_props, apple_vm_compat_defaults,
+                     G_N_ELEMENTS(apple_vm_compat_defaults));
 }
 
 static const TypeInfo apple_vm_machine_info = {

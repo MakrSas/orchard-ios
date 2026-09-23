@@ -12,7 +12,15 @@ typedef struct HIDPointerEvent {
     int32_t dz, buttons_state;
 } HIDPointerEvent;
 
-#define QUEUE_LENGTH    16 /* should be enough for a triple-click */
+/*
+ * 64 rather than upstream's 16. A keystroke is two entries (down and up), so
+ * 16 held eight keys, and a guest emulated at a frame or two a second drains
+ * the queue far slower than anyone types: every key past the eighth was
+ * dropped without a word ("krr" for "makr" on the phone). A power of two, for
+ * QUEUE_MASK. It changes this device's migration layout, which the phone
+ * never uses.
+ */
+#define QUEUE_LENGTH    64
 #define QUEUE_MASK      (QUEUE_LENGTH-1u)
 #define QUEUE_INCR(v)   ((v)++, (v) &= QUEUE_MASK)
 
