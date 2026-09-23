@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if os(iOS)
+import os
+#endif
 
 /// Everything the user can change without a rebuild.
 ///
@@ -47,7 +50,7 @@ final class Settings: ObservableObject {
     /// No 4 GB: past the process's own ceiling, the app is killed before the
     /// guest gets anywhere.
     static let memoryChoices: [(value: String, title: String)] = VMConfig.macGuest
-        ? [("2G", "2 ГБ"), ("2560M", "2.5 ГБ"), ("3G", "3 ГБ")]
+        ? [("2G", "2 ГБ"), ("2560M", "2.5 ГБ"), ("3G", "3 ГБ"), ("3584M", "3.5 ГБ"), ("4G", "4 ГБ")]
         : [("1G", "1 ГБ"), ("1536M", "1.5 ГБ"), ("1792M", "1.75 ГБ"), ("2G", "2 ГБ"), ("3G", "3 ГБ")]
     /// Left at the middle of the range on purpose. Bigger is faster — measured
     /// on the phone, 64 MB gave 8–11 frames a second and 256 gave 21–25 — but
@@ -109,6 +112,17 @@ final class Settings: ObservableObject {
         let size = screenShaped(lines: lines)
         return L("Как экран: %d×%d", size.width, size.height)
     }
+
+    #if os(iOS)
+    /// The process's memory ceiling and whether the entitlement that raises it
+    /// is in force, for the memory section.
+    static var memoryCeiling: String {
+        let used = Threads.footprintBytes() ?? 0
+        let ceiling = Double(used + UInt64(os_proc_available_memory())) / 1_073_741_824
+        let granted = Threads.increasedMemoryLimitGranted() == true
+        return L("~%.1f ГБ, повышенный лимит: %@", ceiling, granted ? L("есть") : L("нет"))
+    }
+    #endif
 
     /// The guest display's refresh rate, as `REIMS_VGPU_DISPLAY_HZ` spells it.
     /// macOS paces its compositor to the display, so a slower one is less work
@@ -699,6 +713,13 @@ private struct MachineSettings: View {
                         Text(L($0.title)).tag($0.value)
                     }
                 }
+                #if os(iOS)
+                // The ceiling iOS kills the app at, as measured right now: the
+                // footprint plus what is left below it. Everything the app holds
+                // besides the guest — about a gigabyte — has to fit under it too.
+                LabeledContent(L("Потолок iOS"), value: Settings.memoryCeiling)
+                    .font(.footnote)
+                #endif
             } header: {
                 Text(L("Память"))
             } footer: {

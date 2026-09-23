@@ -46,6 +46,12 @@
     </array>
     <key>UIFileSharingEnabled</key>
     <true/>
+    <!-- A game to iOS: Game Mode gives it the CPU and GPU first and quiets
+         background work while it is in front, which is what an emulated Mac needs. -->
+    <key>GCSupportsGameMode</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.games</string>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
     <key>UIApplicationSupportsIndirectInputEvents</key>
