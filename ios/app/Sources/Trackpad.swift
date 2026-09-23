@@ -14,7 +14,7 @@ import UIKit
 final class Trackpad {
     private typealias PointerFn = @convention(c) (Int32, Int32, UInt32, Int32) -> Void
     private var pointerFn: PointerFn? {
-        QemuBridge.shared.symbol("inferno_input_pointer").map { unsafeBitCast($0, to: PointerFn.self) }
+        QemuBridge.shared.symbol("orchard_input_pointer").map { unsafeBitCast($0, to: PointerFn.self) }
     }
 
     /// Guest pixels per point of finger travel, before acceleration.

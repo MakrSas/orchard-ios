@@ -55,7 +55,7 @@ final class EmbeddedDisplay: GuestDisplay {
     /// loop got round to. Missing from older builds of the library.
     private typealias StatsFn = @convention(c) (UnsafeMutablePointer<UInt64>?) -> Void
 
-    /// Matches InfernoFrameResult in ui/inferno-embed.h.
+    /// Matches OrchardFrameResult in ui/orchard-embed.h.
     private enum Result: Int32 {
         case none = 0
         case ok = 1
@@ -91,14 +91,14 @@ final class EmbeddedDisplay: GuestDisplay {
 
     /// Available only once the emulator library is loaded and its machine is up.
     init?(bridge: QemuBridge = .shared) {
-        guard let read = bridge.symbol("inferno_display_read"),
-              let touch = bridge.symbol("inferno_input_touch"),
-              let key = bridge.symbol("inferno_input_function_key")
+        guard let read = bridge.symbol("orchard_display_read"),
+              let touch = bridge.symbol("orchard_input_touch"),
+              let key = bridge.symbol("orchard_input_function_key")
         else { return nil }
         self.read = unsafeBitCast(read, to: ReadFn.self)
         self.touchFn = unsafeBitCast(touch, to: TouchFn.self)
         self.keyFn = unsafeBitCast(key, to: KeyFn.self)
-        self.statsFn = bridge.symbol("inferno_display_stats").map { unsafeBitCast($0, to: StatsFn.self) }
+        self.statsFn = bridge.symbol("orchard_display_stats").map { unsafeBitCast($0, to: StatsFn.self) }
     }
 
     deinit {
@@ -113,7 +113,7 @@ final class EmbeddedDisplay: GuestDisplay {
         running = true
 
         let thread = Thread { [weak self] in self?.pump() }
-        thread.name = "inferno.display"
+        thread.name = "orchard.display"
         thread.stackSize = 256 * 1024
         thread.qualityOfService = .userInteractive
         self.thread = thread

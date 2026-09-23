@@ -7,7 +7,7 @@ import Foundation
 /// renders a waveform for the actuator, and the kernel sends it down the i2s
 /// port the AOP drives for it. The emulator library reads that port and
 /// condenses it into frames of ten milliseconds — how hard the actuator was
-/// driven and at what frequency — which `inferno_haptics_read` hands over.
+/// driven and at what frequency — which `orchard_haptics_read` hands over.
 /// Core Haptics does not take a waveform, but it takes exactly that: while the
 /// guest keeps driving, one continuous event plays, and every frame moves its
 /// intensity and sharpness.
@@ -39,7 +39,7 @@ final class HostHaptics {
         // A Mac or an iPad has no taptic engine to play on, which is nothing
         // worth a line in the log at every start.
         guard HostHaptics.isSupported else { return }
-        guard let symbol = bridge.symbol("inferno_haptics_read") else {
+        guard let symbol = bridge.symbol("orchard_haptics_read") else {
             LogCapture.shared.note(L("Вибрация: в этой сборке библиотеки её нет."))
             return
         }
@@ -51,7 +51,7 @@ final class HostHaptics {
         }
 
         let thread = Thread { [weak self] in self?.pump(read, generation: mine) }
-        thread.name = "inferno.haptics"
+        thread.name = "orchard.haptics"
         thread.stackSize = 256 * 1024
         thread.qualityOfService = .userInteractive
         thread.start()
@@ -70,7 +70,7 @@ final class HostHaptics {
 
     private func pump(_ read: ReadFn, generation mine: Int) {
         let capacity = 64
-        // Two floats a frame, as InfernoHapticFrame in ui/inferno-embed.h lays them out.
+        // Two floats a frame, as OrchardHapticFrame in ui/orchard-embed.h lays them out.
         let frames = UnsafeMutablePointer<Float>.allocate(capacity: capacity * 2)
         defer { frames.deallocate() }
         let player = HapticPlayer()

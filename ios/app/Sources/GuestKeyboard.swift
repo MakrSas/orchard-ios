@@ -18,7 +18,7 @@ final class GuestKeys {
     /// Looked up each time rather than cached: the library is loaded only once
     /// the machine starts, and a key pressed before then goes nowhere.
     private var keyFn: KeyFn? {
-        QemuBridge.shared.symbol("inferno_input_key_hid").map { unsafeBitCast($0, to: KeyFn.self) }
+        QemuBridge.shared.symbol("orchard_input_key_hid").map { unsafeBitCast($0, to: KeyFn.self) }
     }
 
     static let leftShift: UInt32 = 0xE1
@@ -45,7 +45,7 @@ final class GuestKeys {
 
     private typealias TapFn = @convention(c) (UInt32, UInt32) -> Void
     private var tapFn: TapFn? {
-        QemuBridge.shared.symbol("inferno_input_key_tap").map { unsafeBitCast($0, to: TapFn.self) }
+        QemuBridge.shared.symbol("orchard_input_key_tap").map { unsafeBitCast($0, to: TapFn.self) }
     }
 
     /// One whole keystroke, with Shift or Command held around it.

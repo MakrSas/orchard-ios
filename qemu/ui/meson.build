@@ -59,10 +59,10 @@ system_ss.add(files(
   'ui-qmp-cmds.c',
   'util.c',
 ))
-# The embedder's display and input (see include/ui/inferno-embed.h). Only a
+# The embedder's display and input (see include/ui/orchard-embed.h). Only a
 # library has an embedder; a qemu-system binary has nothing to call it.
 if get_option('shared_lib')
-  system_ss.add(files('inferno-embed.c'))
+  system_ss.add(files('orchard-embed.c'))
 endif
 if have_hmp
   system_ss.add(files('ui-hmp-cmds.c'))

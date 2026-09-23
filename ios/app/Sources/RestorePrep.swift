@@ -139,7 +139,7 @@ enum RestorePrep {
 
         // 7. The Cryptex1 template -- iOS 16+ only, and any real device's own
         // ticket will do; RestoreClient reads its own copy back out of
-        // InfernoData, same as everything else here.
+        // iPhoneData, same as everything else here.
         if let template = inputs.cryptexTemplate {
             let templateScoped = template.startAccessingSecurityScopedResource()
             defer { if templateScoped { template.stopAccessingSecurityScopedResource() } }

@@ -5,7 +5,7 @@
 # build for iOS; patches/reims-vgpu/0004 made it build for aarch64-apple-ios,
 # and hw/display/meson.build selects backend-metal for an iOS host, so the
 # guest's display is back on. The app reads the frames it puts in the console
-# through ui/inferno-embed.c.
+# through ui/orchard-embed.c.
 
 include ../arm-softmmu/default.mak
 

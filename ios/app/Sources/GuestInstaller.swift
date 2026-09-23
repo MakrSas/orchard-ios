@@ -69,7 +69,7 @@ final class GuestInstaller {
         }.filter { !$0.path.isEmpty }
 
         let scratch = FileManager.default.temporaryDirectory
-            .appendingPathComponent("inferno-install-\(UUID().uuidString).tar")
+            .appendingPathComponent("orchard-install-\(UUID().uuidString).tar")
         defer { try? FileManager.default.removeItem(at: scratch) }
         try Archive.writeTar(staged, to: scratch)
 

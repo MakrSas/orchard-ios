@@ -12,7 +12,7 @@ import Darwin
 /// lockdownd on an installed system.
 ///
 /// It is the same role `netlab/muxd.py` plays on the rig, so the two agree about
-/// the wire formats: `hw/usb/inferno-proto.h` for the socket, and usbmuxd's own
+/// the wire formats: the emulator.s USB socket protocol header for the socket, and usbmuxd's own
 /// `device.c` for the mux header (sixteen bytes from version two on) and the TCP
 /// header whose window is shifted down by eight bits.
 ///
@@ -115,7 +115,7 @@ final class GuestUSB {
         listener = fd
 
         let thread = Thread { [weak self] in self?.serve() }
-        thread.name = "inferno.usb-host"
+        thread.name = "orchard.usb-host"
         thread.stackSize = 512 * 1024
         thread.qualityOfService = .userInitiated
         thread.start()

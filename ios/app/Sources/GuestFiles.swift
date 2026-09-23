@@ -145,14 +145,14 @@ final class GuestFiles {
         // Built around the guest's own variable rather than spelled out: the
         // folder it points at has spaces in its name, and a path with spaces is
         // one more thing to get wrong on a console that drops bytes.
-        let remote = "\"$F/Inferno/\"" + Self.quote(name)
+        let remote = "\"$F/Orchard/\"" + Self.quote(name)
         // The agent needs the destination spelled out, so `$F` is asked for once
         // and expanded here. It holds spaces, which is fine off the console.
-        let plain = shell.text("echo \"$F/Inferno\"").map { $0 + "/" + name }
+        let plain = shell.text("echo \"$F/Orchard\"").map { $0 + "/" + name }
         try carry(file, to: remote, plain: plain, shell: shell, progress: progress, note: { _ in })
         // Root wrote it; the phone's own user has to be able to open it.
-        _ = shell.line("chown -R mobile:mobile \"$F/Inferno\" 2>/dev/null", timeout: 60)
-        return shell.text("echo \"$F/Inferno\"").map { $0 + "/" + name } ?? name
+        _ = shell.line("chown -R mobile:mobile \"$F/Orchard\" 2>/dev/null", timeout: 60)
+        return shell.text("echo \"$F/Orchard\"").map { $0 + "/" + name } ?? name
     }
 
     /// The transfer itself. `remote` is already a shell expression — a quoted
@@ -207,7 +207,7 @@ final class GuestFiles {
 
     /// Points the guest's `$F` at somewhere its own Files app will look.
     ///
-    /// A file dropped in `/var/mobile/Inferno` is invisible from inside the
+    /// A file dropped in `/var/mobile/Orchard` is invisible from inside the
     /// guest: the Files app shows "On My iPhone" out of the local provider's
     /// own container, which lives under an app group whose name is a UUID —
     /// different on every device, so it has to be asked for rather than known.
@@ -236,7 +236,7 @@ final class GuestFiles {
     /// meanwhile only sits in the terminal, where the console drops bytes from
     /// it — and a Ctrl-C meant to clear one mangled line throws away the rest.
     /// That is how `$F` used to end up unset and the folder never made, with
-    /// the retry then asking about `/Inferno` and being told, honestly, no.
+    /// the retry then asking about `/Orchard` and being told, honestly, no.
     ///
     /// So a failed check repeats the whole preparation rather than the check:
     /// after a reset the variables are as likely to be missing as wrong.
@@ -254,13 +254,13 @@ final class GuestFiles {
             ("A=/var/mobile/Containers/Shared/AppGroup", 30),
             ("G=$(grep -l LocalStorage $A/*/.com.apple*.plist 2>/dev/null|head -1)", 180),
             ("[ -n \"$G\" ] && F=\"${G%/*}/File Provider Storage\" || F=/var/mobile", 30),
-            ("mkdir -p \"$F/Inferno\"", 60),
+            ("mkdir -p \"$F/Orchard\"", 60),
         ]
         for (command, timeout) in steps {
             guard shell.line(command, timeout: timeout) != nil else { return false }
             heard = true
         }
-        guard let answer = shell.number("test -d \"$F/Inferno\" && echo 1 || echo 0") else { return false }
+        guard let answer = shell.number("test -d \"$F/Orchard\" && echo 1 || echo 0") else { return false }
         heard = true
         return answer == 1
     }

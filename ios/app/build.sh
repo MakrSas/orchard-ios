@@ -23,38 +23,36 @@ if [ -n "${GITHUB_ACTIONS:-}" ]; then
 else
     IPA="$PROJECT/Orchard.ipa"
 fi
-# INFERNO_HVF=1 builds the HVF variant for M1/M2 iPads on iPadOS up to 16.3.1:
+# ORCHARD_HVF=1 builds the HVF variant for M1/M2 iPads on iPadOS up to 16.3.1:
 # the emulator library built with -Dhvf=enabled, the reimplemented
 # Hypervisor.framework beside it, and the private hypervisor entitlement. It is
 # meant for TrollStore, so it comes out as a .tipa, and under a name of its own
 # so it never overwrites the ordinary Orchard.ipa.
-HVF="${INFERNO_HVF:-}"
-LIBDIR=inferno
+HVF="${ORCHARD_HVF:-}"
+LIBDIR=qemu
 ENTITLEMENTS="$ROOT/Resources/entitlements.plist"
 if [ -n "$HVF" ]; then
     IPA="$(dirname "$IPA")/Orchard-HVF.tipa"
-    LIBDIR=inferno-hvf
+    LIBDIR=qemu-hvf
     ENTITLEMENTS="$ROOT/Resources/entitlements-hvf.plist"
 fi
 # Ищем библиотеку эмулятора там, где она обычно и лежит: сначала рядом с
 # репозиторием, как описано в README, потом в дереве сборки. Переопределяется
-# переменной INFERNO_DYLIB.
-DYLIB="${INFERNO_DYLIB:-}"
+# переменной ORCHARD_DYLIB.
+DYLIB="${ORCHARD_DYLIB:-}"
 if [ -z "$DYLIB" ]; then
     # Orchard's own library first (scripts/build-ios.sh): the one with the
-    # apple-vm machine. The Inferno paths after it hold an iPhone emulator,
-    # which this app no longer drives.
+    # apple-vm machine.
     for candidate in \
         "$ROOT/../../qemu/build-ios/libqemu-aarch64-softmmu.dylib" \
-        "$ROOT/../build/$LIBDIR/libqemu-aarch64-softmmu.dylib" \
-        "$HOME/inferno-ios/build/$LIBDIR/libqemu-aarch64-softmmu.dylib"
+        "$ROOT/../build/$LIBDIR/libqemu-aarch64-softmmu.dylib"
     do
         [ -f "$candidate" ] && DYLIB="$candidate" && break
     done
 fi
 # The HVF variant's framework, from an xcodebuild archive of utmapp/Hypervisor.
-# Overridden by INFERNO_HYPERVISOR.
-HYPERVISOR="${INFERNO_HYPERVISOR:-}"
+# Overridden by ORCHARD_HYPERVISOR.
+HYPERVISOR="${ORCHARD_HYPERVISOR:-}"
 if [ -n "$HVF" ] && [ -z "$HYPERVISOR" ]; then
     for candidate in \
         "$ROOT/../build/hypervisor/Frameworks/Hypervisor.framework" \
@@ -63,7 +61,7 @@ if [ -n "$HVF" ] && [ -z "$HYPERVISOR" ]; then
         [ -d "$candidate" ] && HYPERVISOR="$candidate" && break
     done
     [ -n "$HYPERVISOR" ] || {
-        echo "No Hypervisor.framework for the HVF build. Build utmapp/Hypervisor or set INFERNO_HYPERVISOR=" >&2
+        echo "No Hypervisor.framework for the HVF build. Build utmapp/Hypervisor or set ORCHARD_HYPERVISOR=" >&2
         exit 1
     }
 fi
@@ -72,7 +70,7 @@ SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 TARGET="arm64-apple-ios16.0"
 
 [ -n "$DYLIB" ] && [ -f "$DYLIB" ] || {
-    echo "Нет библиотеки эмулятора. Соберите её или укажите INFERNO_DYLIB=" >&2
+    echo "Нет библиотеки эмулятора. Соберите её или укажите ORCHARD_DYLIB=" >&2
     exit 1
 }
 
@@ -114,8 +112,8 @@ chmod +x "$APP/Orchard"
 #
 # The patcher is ChefKiss's, AGPL-3.0, built from their tree unmodified --
 # beside the repository as the README has it, or wherever
-# INFERNO_FS_PATCHER_SRC points.
-PATCHER_SRC="${INFERNO_FS_PATCHER_SRC:-}"
+# ORCHARD_FS_PATCHER_SRC points.
+PATCHER_SRC="${ORCHARD_FS_PATCHER_SRC:-}"
 if [ -z "$PATCHER_SRC" ]; then
     for candidate in \
         "$ROOT/../tools/InfernoFSPatcher" \
@@ -125,29 +123,26 @@ if [ -z "$PATCHER_SRC" ]; then
     done
 fi
 [ -n "$PATCHER_SRC" ] && [ -f "$PATCHER_SRC/src/main.cpp" ] || {
-    echo "Нет исходников InfernoFSPatcher. Склонируйте их или укажите INFERNO_FS_PATCHER_SRC=" >&2
+    echo "Нет исходников InfernoFSPatcher. Склонируйте их или укажите ORCHARD_FS_PATCHER_SRC=" >&2
     exit 1
 }
 mkdir -p "$APP/guest"
 # arm64e and iOS 14: the guest is an emulated iPhone 11 running the firmware
 # being restored, not the phone this app is installed on.
 xcrun --sdk iphoneos clang -arch arm64e -isysroot "$SDK" -mios-version-min=14.0 -O2 \
-    -o "$APP/guest/inferno_patcher" "$ROOT/guest/patcher-daemon.c"
+    -o "$APP/guest/orchard_patcher" "$ROOT/guest/patcher-daemon.c"
 xcrun --sdk iphoneos clang++ -arch arm64e -isysroot "$SDK" -mios-version-min=14.0 -O2 \
-    -std=c++17 -o "$APP/guest/inferno_fs_patcher" "$PATCHER_SRC/src/main.cpp"
-codesign -f -s - "$APP/guest/inferno_patcher"
-codesign -f -s - "$APP/guest/inferno_fs_patcher"
+    -std=c++17 -o "$APP/guest/orchard_fs_patcher" "$PATCHER_SRC/src/main.cpp"
+codesign -f -s - "$APP/guest/orchard_patcher"
+codesign -f -s - "$APP/guest/orchard_fs_patcher"
 
-# QEMU's data directory. Inferno drops the keymaps from its tree, but the VNC
+# QEMU's data directory. The iOS build drops the keymaps from its tree, but the VNC
 # server still refuses to start without them, so take them from a stock QEMU.
-KEYMAPS="${INFERNO_KEYMAPS:-/opt/homebrew/share/qemu/keymaps}"
+KEYMAPS="${ORCHARD_KEYMAPS:-/opt/homebrew/share/qemu/keymaps}"
 [ -d "$KEYMAPS" ] || { echo "Нет keymap-файлов: $KEYMAPS" >&2; exit 1; }
 mkdir -p "$APP/qemu-data"
 cp -R "$KEYMAPS" "$APP/qemu-data/keymaps"
 
-# No boot splash. Inferno's splash artwork belongs to ChefKiss and may not be
-# shipped in derivative builds (ui/icons/CKBrandingNotice.md in the emulator
-# tree); the fork starts without it.
 
 # App icon. Two sources, same actool-compile-then-merge-partial-plist dance:
 # the Info.plist keys actool wants come back in a partial plist, merged
@@ -159,7 +154,7 @@ cp -R "$KEYMAPS" "$APP/qemu-data/keymaps"
 #                    for older Xcode. Works everywhere but does not get the
 #                    glass treatment.
 #
-# Local builds get the real one; INFERNO_NO_ICON=1 skips both (app ships
+# Local builds get the real one; ORCHARD_NO_ICON=1 skips both (app ships
 # with no icon at all).
 compile_icon() { # compile_icon <catalog-dir> <app-icon-name>
     xcrun actool --compile "$APP" \
@@ -183,7 +178,7 @@ PY
 ICON="$ROOT/Resources/Orchard.icon"
 ICON_NAME=Orchard
 FALLBACK_ICON="$ROOT/Resources/Assets.xcassets"
-if [ -z "${INFERNO_NO_ICON:-}" ]; then
+if [ -z "${ORCHARD_NO_ICON:-}" ]; then
     # The probe compiles into the build directory, not /tmp, so nothing is left behind.
     mkdir -p "$BUILD/actool-probe"
     if [ -d "$ICON" ] && xcrun actool --version >/dev/null 2>&1 && \
@@ -204,7 +199,7 @@ echo "==> Помощник для гостя (nsio)"
 # These tools go into an iPhone guest and are built by Inferno-iOS's netlab/,
 # which this tree does not carry: a macOS guest has no use for them. Built when
 # netlab/ is there, skipped when it is not.
-if [ -z "${INFERNO_NO_NSIO:-}" ] && command -v ldid >/dev/null 2>&1 \
+if [ -z "${ORCHARD_NO_NSIO:-}" ] && command -v ldid >/dev/null 2>&1 \
    && [ -x "$ROOT/../netlab/build-nsio.sh" ]; then
     mkdir -p "$APP/guest-tools"
     "$ROOT/../netlab/build-nsio.sh" "$APP/guest-tools/nsio" >/dev/null

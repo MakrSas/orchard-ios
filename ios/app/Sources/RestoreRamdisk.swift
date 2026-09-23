@@ -52,7 +52,7 @@ enum RestoreRamdisk {
         <plist version="1.0">
         <dict>
         \t<key>Label</key>
-        \t<string>com.inferno.patcher</string>
+        \t<string>com.orchard.patcher</string>
         \t<key>ProgramArguments</key>
         \t<array>
         \t\t<string>\(daemonPath)</string>
@@ -93,8 +93,8 @@ enum RestoreRamdisk {
     /// The two programs, as the build puts them into the app.
     static var programs: (daemon: URL, patcher: URL)? {
         let bundle = Bundle.main.bundleURL.appendingPathComponent("guest")
-        let daemon = bundle.appendingPathComponent("inferno_patcher")
-        let patcher = bundle.appendingPathComponent("inferno_fs_patcher")
+        let daemon = bundle.appendingPathComponent("orchard_patcher")
+        let patcher = bundle.appendingPathComponent("orchard_fs_patcher")
         guard FileManager.default.fileExists(atPath: daemon.path),
               FileManager.default.fileExists(atPath: patcher.path)
         else { return nil }

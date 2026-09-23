@@ -23,7 +23,7 @@ import SwiftUI
 /// One window and one model. A second window would be a second emulator, in
 /// this process, where there is room for one.
 @main
-struct InfernoMacApp: App {
+struct OrchardMacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var delegate
 
     init() {
@@ -123,7 +123,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
-        // For testing from a script: `open Inferno.app --args -autostart YES`
+        // For testing from a script: `open Orchard.app --args -autostart YES`
         // starts the machine without anyone reaching for the menu. A launch
         // argument lives only in this process's defaults and is never saved.
         if UserDefaults.standard.bool(forKey: "autostart") { VMModel.mac.start() }
@@ -192,7 +192,7 @@ final class PhoneWindow: NSWindow, NSWindowDelegate {
         super.init(contentRect: NSRect(origin: .zero, size: PhoneWindow.frameSize(forScreen: screen)),
                    styleMask: [.borderless, .closable, .miniaturizable, .resizable],
                    backing: .buffered, defer: false)
-        title = "Inferno"
+        title = "Orchard"
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true

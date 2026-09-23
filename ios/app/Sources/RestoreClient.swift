@@ -156,7 +156,7 @@ final class RestoreClient {
                 "128": 1280, "256": 1280, "512": 1280, "768": 1280, "1024": 1280]
         return [
             "Request": "StartRestore",
-            "Label": "Inferno",
+            "Label": "Orchard",
             "RestoreOptions": options,
             "RestoreProtocolVersion": protocolVersion,
         ]

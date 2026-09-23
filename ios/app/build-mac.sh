@@ -4,11 +4,11 @@
 # inside the bundle, so the result runs on a Mac that has no Homebrew.
 #
 # The emulator is the macOS build of the same fork (-Dshared_lib=true,
-# -Dhvf=enabled), found in ../build/inferno-macos or ~/inferno-ios/build/
-# inferno-macos, or wherever INFERNO_MAC_DYLIB points.
+# -Dhvf=enabled), found in ../build/qemu-macos or wherever ORCHARD_MAC_DYLIB
+# points.
 #
-# The app lands in app/.build-mac/Inferno.app, and a zip of it and a disk image
-# to install it from in the project root beside Inferno.ipa, where builds are
+# The app lands in app/.build-mac/Orchard.app, and a zip of it and a disk image
+# to install it from in the project root beside Orchard.ipa, where builds are
 # picked up by hand.
 set -euo pipefail
 
@@ -22,23 +22,22 @@ unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PROJECT="$(cd "$ROOT/.." && pwd)"
 BUILD="$ROOT/.build-mac"
-APP="$BUILD/Inferno.app"
-ZIP="$PROJECT/Inferno-macOS.zip"
-DMG="$PROJECT/Inferno-macOS.dmg"
+APP="$BUILD/Orchard.app"
+ZIP="$PROJECT/Orchard-macOS.zip"
+DMG="$PROJECT/Orchard-macOS.dmg"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 TARGET="arm64-apple-macos15.0"
 
-DYLIB="${INFERNO_MAC_DYLIB:-}"
+DYLIB="${ORCHARD_MAC_DYLIB:-}"
 if [ -z "$DYLIB" ]; then
     for candidate in \
-        "$ROOT/../build/inferno-macos/libqemu-aarch64-softmmu.dylib" \
-        "$HOME/inferno-ios/build/inferno-macos/libqemu-aarch64-softmmu.dylib"
+        "$ROOT/../build/qemu-macos/libqemu-aarch64-softmmu.dylib"
     do
         [ -f "$candidate" ] && DYLIB="$candidate" && break
     done
 fi
 [ -n "$DYLIB" ] && [ -f "$DYLIB" ] || {
-    echo "No macOS emulator library. Build it (see the header) or set INFERNO_MAC_DYLIB=" >&2
+    echo "No macOS emulator library. Build it (see the header) or set ORCHARD_MAC_DYLIB=" >&2
     exit 1
 }
 
@@ -60,7 +59,7 @@ xcrun --sdk macosx swiftc \
     -O -wmo \
     -parse-as-library \
     -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
-    -o "$APP/Contents/MacOS/Inferno" \
+    -o "$APP/Contents/MacOS/Orchard" \
     "$ROOT"/Sources/*.swift
 
 echo "==> Bundle"
@@ -95,20 +94,20 @@ leftover="$(for lib in "$FRAMEWORKS"/*.dylib; do foreign "$lib"; done | sort -u)
 echo "    $(ls "$FRAMEWORKS" | wc -l | tr -d ' ') libraries"
 
 # QEMU's data directory. The VNC server refuses to start without keymaps, and
-# Inferno drops them from its tree, so take them from a stock QEMU.
-KEYMAPS="${INFERNO_KEYMAPS:-/opt/homebrew/share/qemu/keymaps}"
+# the iOS build drops them from its tree, so take them from a stock QEMU.
+KEYMAPS="${ORCHARD_KEYMAPS:-/opt/homebrew/share/qemu/keymaps}"
 [ -d "$KEYMAPS" ] || { echo "No keymap files: $KEYMAPS" >&2; exit 1; }
 mkdir -p "$APP/Contents/Resources/qemu-data"
 cp -R "$KEYMAPS" "$APP/Contents/Resources/qemu-data/keymaps"
 
 # The app icon, from the same Icon Composer bundle the iPhone app uses.
-ICON="$ROOT/Resources/Inferno.icon"
-if [ -z "${INFERNO_NO_ICON:-}" ] && [ -d "$ICON" ]; then
+ICON="$ROOT/Resources/Orchard.icon"
+if [ -z "${ORCHARD_NO_ICON:-}" ] && [ -d "$ICON" ]; then
     echo "==> Icon"
     xcrun actool --compile "$APP/Contents/Resources" \
         --platform macosx \
         --minimum-deployment-target 15.0 \
-        --app-icon Inferno \
+        --app-icon Orchard \
         --output-partial-info-plist "$BUILD/icon.plist" \
         "$ICON" > /dev/null
     python3 - "$APP/Contents/Info.plist" "$BUILD/icon.plist" <<'PY'
@@ -124,7 +123,7 @@ fi
 
 # The programs the app carries into the guest. They are iOS binaries for the
 # guest, not for the Mac, so they are the same ones the iPhone app bundles.
-if [ -z "${INFERNO_NO_NSIO:-}" ] && command -v ldid >/dev/null 2>&1; then
+if [ -z "${ORCHARD_NO_NSIO:-}" ] && command -v ldid >/dev/null 2>&1; then
     echo "==> Guest tools"
     TOOLS="$APP/Contents/Resources/guest-tools"
     mkdir -p "$TOOLS"
@@ -140,10 +139,10 @@ fi
 echo "==> Signing"
 # Ad-hoc unless told otherwise, which is what a release ships. To macOS's privacy
 # checks every ad-hoc rebuild is a new app, so each one asks again for the
-# Documents folder and hangs at launch until someone answers. INFERNO_MAC_SIGN
+# Documents folder and hangs at launch until someone answers. ORCHARD_MAC_SIGN
 # names a certificate to sign with instead, and the same certificate keeps the
 # answer from one build to the next.
-SIGN="${INFERNO_MAC_SIGN:--}"
+SIGN="${ORCHARD_MAC_SIGN:--}"
 # Inside out: the libraries first, since the app's seal covers them.
 for lib in "$FRAMEWORKS"/*.dylib; do
     codesign --force --sign "$SIGN" --timestamp=none "$lib"
@@ -162,9 +161,9 @@ ditto -c -k --keepParent "$APP" "$ZIP"
 STAGE="$BUILD/dmg"
 rm -rf "$STAGE" "$DMG"
 mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/Inferno.app"
+ditto "$APP" "$STAGE/Orchard.app"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname Inferno -srcfolder "$STAGE" -format UDZO -ov "$DMG" >/dev/null
+hdiutil create -volname Orchard -srcfolder "$STAGE" -format UDZO -ov "$DMG" >/dev/null
 rm -rf "$STAGE"
 
 echo

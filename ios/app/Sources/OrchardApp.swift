@@ -10,7 +10,7 @@ import AppKit
 
 #if os(iOS)
 @main
-struct InfernoApp: App {
+struct OrchardApp: App {
     init() {
         Bootstrap.prepareDocuments()
         // Start capturing before anything can fail, so the reason is on screen.
@@ -207,7 +207,7 @@ final class VMModel: ObservableObject {
         // moment that is safe: after qemu_init, before the main loop.
         if config.builtInDisplay, !config.headless {
             QemuBridge.shared.afterInit = {
-                guard let attach = QemuBridge.shared.symbol("inferno_display_attach") else { return }
+                guard let attach = QemuBridge.shared.symbol("orchard_display_attach") else { return }
                 unsafeBitCast(attach, to: (@convention(c) () -> Void).self)()
             }
         }
@@ -339,7 +339,7 @@ final class VMModel: ObservableObject {
 
     /// Asks the emulator whether the guest ever configured its end of the link.
     var linkIsUp: Bool {
-        guard let fn = QemuBridge.shared.symbol("inferno_net_link_up") else { return false }
+        guard let fn = QemuBridge.shared.symbol("orchard_net_link_up") else { return false }
         return unsafeBitCast(fn, to: (@convention(c) () -> Bool).self)()
     }
 
@@ -2043,7 +2043,7 @@ struct TerminalView: View {
 /// There is only ever one machine right now, and no way from inside the app
 /// to fetch or point at its image yet — the real picker (choosing between
 /// prepared VMs) waits on the vmapple backend. This is its placeholder: it
-/// says that plainly instead of walking through Inferno's iPhone restore
+/// says that plainly instead of walking through the iPhone restore
 /// flow, which does not apply here.
 struct SetupView: View {
     @ObservedObject var model: VMModel

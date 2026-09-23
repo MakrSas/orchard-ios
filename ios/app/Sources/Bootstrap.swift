@@ -11,11 +11,11 @@ enum Bootstrap {
         let fm = FileManager.default
         let documents = VMConfig.documents
 
-        // InfernoData only for now: it is where the scratch/xfer namespace
+        // iPhoneData only for now: it is where the scratch/xfer namespace
         // below lives. The rest of the iPhone restore tree (SEP firmware,
         // kernelcache, DeviceTree…) doesn't apply to a macOS guest and isn't
         // created here anymore.
-        let url = documents.appendingPathComponent("InfernoData")
+        let url = documents.appendingPathComponent("iPhoneData")
         if !fm.fileExists(atPath: url.path) {
             try? fm.createDirectory(at: url, withIntermediateDirectories: true)
         }

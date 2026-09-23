@@ -52,8 +52,8 @@
 #include "reims_vgpu_qemu_abi.h"
 #include "reims-vgpu-dirty.h"
 #include "reims-vgpu-shim.h"
-#ifdef CONFIG_INFERNO_EMBED
-#include "ui/inferno-embed.h"
+#ifdef CONFIG_ORCHARD_EMBED
+#include "ui/orchard-embed.h"
 #endif
 
 /*
@@ -228,9 +228,9 @@ static ReimsVGPUMMIOState *reims_vgpu_mmio_instance;
 
 /*
  * Not in the library build: there is no QEMU main() to hand over there, and the
- * embedding app already owns its initial thread (see include/ui/inferno-embed.h).
+ * embedding app already owns its initial thread (see include/ui/orchard-embed.h).
  */
-#if defined(CONFIG_DARWIN) && !defined(CONFIG_INFERNO_EMBED)
+#if defined(CONFIG_DARWIN) && !defined(CONFIG_ORCHARD_EMBED)
 /*
  * winit/AppKit owns the initial process thread. QEMU's Darwin main wrapper
  * already moves its emulation loop to a background thread when qemu_main is
@@ -824,9 +824,9 @@ static bool reims_vgpu_mmio_paint_scanout(ReimsVGPUMMIOState *s,
             qemu_console_update_full(s->con);
             s->new_frame_ready = false;
         }
-#ifdef CONFIG_INFERNO_EMBED
+#ifdef CONFIG_ORCHARD_EMBED
         /* One frame into the console, however many rows it touched. */
-        inferno_display_note_present();
+        orchard_display_note_present();
 #endif
     }
     return true;
@@ -1459,7 +1459,7 @@ static void reims_vgpu_mmio_realize(DeviceState *dev, Error **errp)
                                                     s->early_fb_width,
                                                     s->early_fb_height);
             }
-#if defined(CONFIG_DARWIN) && !defined(CONFIG_INFERNO_EMBED)
+#if defined(CONFIG_DARWIN) && !defined(CONFIG_ORCHARD_EMBED)
             reims_vgpu_mmio_window_owner = s;
             qemu_main = reims_vgpu_mmio_window_main_loop;
 #endif
@@ -1504,7 +1504,7 @@ static void reims_vgpu_mmio_unrealize(DeviceState *dev)
         reims_vgpu_qemu_device_destroy(s->rust_handle);
         s->rust_handle = 0;
     }
-#if defined(CONFIG_DARWIN) && !defined(CONFIG_INFERNO_EMBED)
+#if defined(CONFIG_DARWIN) && !defined(CONFIG_ORCHARD_EMBED)
     if (reims_vgpu_mmio_window_owner == s) {
         reims_vgpu_mmio_window_owner = NULL;
     }

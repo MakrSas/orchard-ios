@@ -249,11 +249,11 @@ final class Settings: ObservableObject {
     /// behaviour in both cases, so an unknown build behaves as it always did.
     var emulatorEnvironment: [String: String] {
         var env: [String: String] = [:]
-        if vcpuPriority { env["INFERNO_VCPU_QOS"] = "interactive" }
+        if vcpuPriority { env["ORCHARD_VCPU_QOS"] = "interactive" }
         // The audio hardware is described to the guest only when this is set: the drivers behind those
         // device tree nodes cost boot time and idle CPU, so a machine started without sound carries none
         // of them.
-        if guestAudio { env["INFERNO_AUDIO"] = "1" }
+        if guestAudio { env["ORCHARD_AUDIO"] = "1" }
         if let lines = Int(guestResolution.dropFirst("screen".count)),
            guestResolution.hasPrefix("screen") {
             let size = Settings.screenShaped(lines: lines)
@@ -637,7 +637,7 @@ private struct NetworkSettings: View {
                 Text(L("Порт USB"))
             } footer: {
                 Text(settings.usbExport
-                     ? L("Пока это включено, интернета в госте и восстановления не будет: порт у гостя один, и хост у него один. На маке нужен клиент VirtualHere — он найдёт машину сам (Bonjour, имя «Inferno») или примет адрес руками. Только TCP; гость должен догрузиться до подъёма своего USB.")
+                     ? L("Пока это включено, интернета в госте и восстановления не будет: порт у гостя один, и хост у него один. На маке нужен клиент VirtualHere — он найдёт машину сам (Bonjour, имя «Orchard») или примет адрес руками. Только TCP; гость должен догрузиться до подъёма своего USB.")
                      : L("Порт гостя можно отдать другой машине по протоколу VirtualHere: мак с клиентом VirtualHere увидит настоящий айфон на своём USB — Finder, usbmuxd, idevice-инструменты. Взамен уходит всё, ради чего порт нужен здесь: интернет в госте и восстановление."))
             }
         }
@@ -1005,7 +1005,7 @@ private struct RestoreSettings: View {
             } footer: {
                 Text(source == .scratch
                      ? L("Приложение сделает всё само: диски, распаковку прошивки, оба тикета и прошивку SEP. В свою папку заранее класть нечего — файлы выбираются в «Файлах» и читаются там, где лежат.")
-                     : L("Берётся InfernoData, уже лежащая в папке приложения, — та, что собрана на компьютере."))
+                     : L("Берётся iPhoneData, уже лежащая в папке приложения, — та, что собрана на компьютере."))
             }
 
             if source == .scratch {

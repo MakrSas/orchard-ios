@@ -24,7 +24,7 @@ final class LogCapture: ObservableObject {
     private var fileHandle: FileHandle?
 
     /// Lines are cut, stamped and counted here, in the order they arrive.
-    private let queue = DispatchQueue(label: "inferno.log")
+    private let queue = DispatchQueue(label: "orchard.log")
     private let startTime = Date()
     /// What the pipe delivered after its last newline, waiting for the rest.
     private var partial = ""
@@ -42,7 +42,7 @@ final class LogCapture: ObservableObject {
     private static var documents: URL {
         let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         #if os(macOS)
-        return base.appendingPathComponent("Inferno")
+        return base.appendingPathComponent("Orchard")
         #else
         return base
         #endif

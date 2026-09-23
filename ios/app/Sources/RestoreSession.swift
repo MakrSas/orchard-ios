@@ -54,7 +54,7 @@ final class RestoreSession: ObservableObject {
     /// Made once and kept beside the kit; made again whenever the app is newer
     /// than the image, which is how a new patcher reaches an old kit.
     static func bootRamdisk(_ stock: URL) -> URL {
-        let ours = VMConfig.dataDirectory.appendingPathComponent("Restore-inferno.dmg")
+        let ours = VMConfig.dataDirectory.appendingPathComponent("Restore-orchard.dmg")
         let stamp = { (url: URL) in
             (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
                 ?? Date.distantPast
@@ -178,7 +178,7 @@ final class RestoreSession: ObservableObject {
             do {
                 let channel = try usb.connect(to: .restored, timeout: 120)
                 defer { channel.close() }
-                let answer = try RestoreClient.request(channel, ["Request": "QueryType", "Label": "Inferno"])
+                let answer = try RestoreClient.request(channel, ["Request": "QueryType", "Label": "Orchard"])
                 let type = answer["Type"] as? String ?? "?"
                 let version = (answer["RestoreProtocolVersion"] as? NSNumber)?.intValue ?? 0
                 LogCapture.shared.note(L("Рестор: гость отвечает — %@, протокол %d", type, version))
@@ -196,7 +196,7 @@ final class RestoreSession: ObservableObject {
     private func restore(over channel: GuestUSB.Channel, usb: GuestUSB,
                          protocolVersion: Int) throws {
         guard let firmware = RestoreSession.firmware else {
-            LogCapture.shared.note(L("Рестор: положите .ipsw рядом с InfernoData, см. RESTORE.md"))
+            LogCapture.shared.note(L("Рестор: положите .ipsw рядом с iPhoneData, см. RESTORE.md"))
             return
         }
         guard let ticket = try? Data(contentsOf: RestoreSession.ticket) else {

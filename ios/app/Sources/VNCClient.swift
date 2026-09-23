@@ -39,7 +39,7 @@ final class VNCClient: GuestDisplay {
         running = true
 
         let thread = Thread { [weak self] in self?.run() }
-        thread.name = "inferno.vnc"
+        thread.name = "orchard.vnc"
         thread.stackSize = 512 * 1024
         self.thread = thread
         thread.start()

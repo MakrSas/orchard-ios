@@ -64,7 +64,7 @@ enum GuestPackages {
     /// read here instead of being guessed at from an exit status. Cydia shows
     /// only `cydo returned an error code (2)`, and that 2 is dpkg's own — cydo
     /// answers a refusal with 77 — so dpkg's words are the thing worth having.
-    private static let log = "/var/mobile/.inferno/packages.log"
+    private static let log = "/var/mobile/.orchard/packages.log"
 
     private struct Step {
         let title: String
@@ -77,7 +77,7 @@ enum GuestPackages {
         let fatal: Bool
     }
 
-    private static let queue = "/var/tmp/inferno-cydo"
+    private static let queue = "/var/tmp/orchard-cydo"
 
     /// Runs dpkg as root for whoever asks.
     ///
@@ -88,7 +88,7 @@ enum GuestPackages {
     /// Cydia then waits on it until the watchdog kills Cydia.
     private static let rootScript = [
         "#!/bin/bash",
-        "# Runs dpkg as root on behalf of Cydia. Started by Inferno, because",
+        "# Runs dpkg as root on behalf of Cydia. Started by Orchard, because",
         "# nothing in this guest is setuid and cydo cannot elevate itself.",
         "set -u",
         "queue=\(queue)",
@@ -170,7 +170,7 @@ enum GuestPackages {
         // root's, so a signal to it comes back as "not permitted" rather than
         // as "alive", and the client would refuse every time.
         "if ! ps -p \"$pid\" >/dev/null 2>&1; then",
-        "    echo \"cydo: Inferno helper is not running - press Repair the package manager in the app\" >&2",
+        "    echo \"cydo: Orchard helper is not running - press Repair the package manager in the app\" >&2",
         "    exit 2",
         "fi",
         "id=\"$queue/$$-$RANDOM\"",
@@ -226,7 +226,7 @@ enum GuestPackages {
     static func installDeb(_ local: URL, serial: SerialConsole, files: GuestFiles,
                            progress: @escaping (Int64, Int64) -> Void,
                            note: @escaping (String) -> Void) throws -> String {
-        let remote = "/var/mobile/.inferno/install.deb"
+        let remote = "/var/mobile/.orchard/install.deb"
 
         try awaitShell(serial)
         try ensureWritable(serial)
@@ -236,7 +236,7 @@ enum GuestPackages {
         // long command, and those are left to run on their own.
         let package: String = try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
+            shell.line("mkdir -p /var/mobile/.orchard", timeout: 60)
 
             note(L("Переношу пакет в гостя…"))
             try files.carry(local, to: remote, plain: remote, shell: shell, progress: progress, note: note)
@@ -274,12 +274,12 @@ enum GuestPackages {
     /// Read through a file rather than off the console: the answer is three
     /// hundred lines long, and the console loses bytes inside long ones.
     static func installed(serial: SerialConsole, files: GuestFiles) throws -> [String: String] {
-        let listing = "/var/mobile/.inferno/installed.txt"
+        let listing = "/var/mobile/.orchard/installed.txt"
 
         try awaitShell(serial)
         try serial.exclusive {
             let shell = GuestShell(serial: serial)
-            shell.line("mkdir -p /var/mobile/.inferno", timeout: 60)
+            shell.line("mkdir -p /var/mobile/.orchard", timeout: 60)
             guard shell.line("dpkg-query -W -f='${Package}\t${Version}\n' > \(listing) 2>/dev/null",
                              timeout: 600) != nil
             else { throw Failure.silent(L("Читаю установленное")) }
@@ -366,7 +366,7 @@ enum GuestPackages {
     @discardableResult
     private static func runDetached(_ command: String, serial: SerialConsole,
                                     timeout: TimeInterval) throws -> Int64? {
-        let done = "/var/mobile/.inferno/step.rc"
+        let done = "/var/mobile/.orchard/step.rc"
         // A guest that panics answers nothing ever again, and the wait below is
         // half an hour long. The console says when that has happened, so the
         // count is taken now and watched for the rest of the wait.
@@ -492,7 +492,7 @@ enum GuestPackages {
         try awaitShell(serial)
 
         serial.exclusive {
-            GuestShell(serial: serial).line("mkdir -p /var/mobile/.inferno; : > \(log)", timeout: 60)
+            GuestShell(serial: serial).line("mkdir -p /var/mobile/.orchard; : > \(log)", timeout: 60)
         }
 
         // Each step on its own, and the long ones detached: firmware.sh and
@@ -530,7 +530,7 @@ enum GuestPackages {
             let text = (rootScript + clientScript).joined(separator: "\n")
             text.utf8CString.withUnsafeBytes { stamp.update($0) }
             let version = String(format: "%08x", stamp.value)
-            let marker = "/var/mobile/.inferno/cydo.version"
+            let marker = "/var/mobile/.orchard/cydo.version"
             let ours = "grep -qs '^# Stands in for Cydia' /usr/libexec/cydia/cydo"
             let same = shell.number("test -x /usr/libexec/cydia/cydo.real && \(ours) && "
                                     + "grep -qs '^\(version)$' \(marker) && echo 1 || echo 0") == 1
@@ -551,8 +551,8 @@ enum GuestPackages {
                 "echo \(version) > \(marker)",
                 // An earlier version of this shipped a launchd job. It does not
                 // survive a reboot on this image, so it is taken back out.
-                "launchctl unload /Library/LaunchDaemons/com.inferno.cydo.plist >/dev/null 2>&1",
-                "rm -f /Library/LaunchDaemons/com.inferno.cydo.plist",
+                "launchctl unload /Library/LaunchDaemons/com.orchard.cydo.plist >/dev/null 2>&1",
+                "rm -f /Library/LaunchDaemons/com.orchard.cydo.plist",
                 // Requests left behind while no helper was running: nobody is
                 // waiting on them any more.
                 "mkdir -p \(queue)",

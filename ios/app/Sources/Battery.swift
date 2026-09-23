@@ -9,7 +9,7 @@ import IOKit.ps
 ///
 /// The machine's SMC used to answer 69 % and "on battery" whatever the phone
 /// was doing: the figure was written into the emulator. The library now takes
-/// the real one through `inferno_battery_set`, tells the guest the power state
+/// the real one through `orchard_battery_set`, tells the guest the power state
 /// changed, and the guest's battery driver reads it within a few seconds rather
 /// than on its own twenty-second poll.
 ///
@@ -51,7 +51,7 @@ final class HostBattery {
             report(force: true)
             return
         }
-        guard let symbol = bridge.symbol("inferno_battery_set") else {
+        guard let symbol = bridge.symbol("orchard_battery_set") else {
             LogCapture.shared.note(L("Батарея: в этой сборке библиотеки её нет, гость видит 69 %."))
             return
         }

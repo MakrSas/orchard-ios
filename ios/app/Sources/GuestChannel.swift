@@ -28,7 +28,7 @@ import Foundation
 final class TransferNamespace {
     /// Where the app keeps its own things inside the guest. On the data volume,
     /// so it survives the guest rebooting.
-    static let toolsDirectory = "/var/mobile/.inferno"
+    static let toolsDirectory = "/var/mobile/.orchard"
     private static let chunkFile = toolsDirectory + "/chunk.bin"
 
     let device: String

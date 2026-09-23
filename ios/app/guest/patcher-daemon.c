@@ -174,11 +174,11 @@ int main(void)
     // writes, and the console dropped all of it last time -- which is exactly
     // what was needed to see that the pair it wrote landed an instruction out.
     char* patch_args[] = {"/usr/standalone/firmware/nfrestore/firmware/jcop-prod/JCOP-11.04-012.2-P.bin", cache, NULL};
-    int   code = run_to(MOUNTPOINT "/inferno_patch.log", patch_args[0], patch_args);
+    int   code = run_to(MOUNTPOINT "/orchard_patch.log", patch_args[0], patch_args);
     printf("*** PATCHER: the patcher exited with %d\n", code);
     fflush(stdout);
 
-    int log = open(MOUNTPOINT "/inferno_patch.log", O_RDONLY);
+    int log = open(MOUNTPOINT "/orchard_patch.log", O_RDONLY);
     if (log >= 0) {
         static char text[65536];
         ssize_t     got = read(log, text, sizeof(text) - 1);

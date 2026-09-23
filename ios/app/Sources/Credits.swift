@@ -40,14 +40,10 @@ struct Credit: Identifiable, Hashable {
     /// The list, in the order the work stacks up: the emulator first, because
     /// without it there is nothing to show, and the two who wrote this app last.
     static let all: [Credit] = [
-        Credit(github: "VisualEhrmanntraut",
-               name: "Visual Ehrmanntraut",
-               did: L("Автор Inferno — эмулятора Apple Silicon, внутри которого и работает гость. Всё, что делает это приложение, стоит на нём."),
-               x: "HeWhomCodes", site: "https://chefkiss.dev"),
-        Credit(github: "ChefKissInc",
-               name: "ChefKiss",
-               did: L("Команда Inferno. Их же руководства по сборке образа гостя и по джейлбрейк-бутстрапу — без них запустить тут было бы нечего."),
-               x: nil, site: "https://chefkiss.dev"),
+        Credit(github: "yaelliethy",
+               name: "Youssef Elliethy",
+               did: L("Автор Orchard — форка QEMU, в котором macOS грузится штатной цепочкой Apple на машине apple-vm. Гость работает на этом эмуляторе, а это приложение — перенос Orchard на iPhone."),
+               x: nil, site: nil),
         Credit(github: "",
                name: "QEMU",
                did: L("Orchard — форк QEMU, а QEMU написан очень многими людьми. Отдельного человека тут назвать нельзя, но без их работы не было бы ни эмулятора, ни приложения."),
@@ -105,7 +101,7 @@ struct CreditsView: View {
                         .buttonStyle(.plain)
                 }
             } footer: {
-                Text(L("Приложение неофициальное и никак не связано с ChefKiss. Аватарки берутся с GitHub — у X открытого способа их получить нет."))
+                Text(L("Приложение неофициальное и никак не связано с Apple. Аватарки берутся с GitHub — у X открытого способа их получить нет."))
             }
         }
         .navigationTitle(L("Благодарности"))

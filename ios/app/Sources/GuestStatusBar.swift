@@ -252,7 +252,7 @@ final class PhoneNetwork {
             #endif
             DispatchQueue.main.async { self?.update(wifi: wifi) }
         }
-        monitor.start(queue: DispatchQueue(label: "inferno.phone-network"))
+        monitor.start(queue: DispatchQueue(label: "orchard.phone-network"))
         self.monitor = monitor
         update(wifi: onWiFi)
     }

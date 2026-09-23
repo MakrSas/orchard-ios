@@ -1,6 +1,6 @@
 import Foundation
 
-/// Loads the Inferno emulator library and drives its lifecycle.
+/// Loads the emulator library and drives its lifecycle.
 ///
 /// iOS cannot fork/exec, so the emulator runs inside this process: the dylib is
 /// dlopen'd and `qemu_init` / `qemu_main_loop` / `qemu_cleanup` are called on a
@@ -136,7 +136,7 @@ final class QemuBridge {
         }
         // The translation buffer and device emulation want room to breathe.
         thread.stackSize = 4 * 1024 * 1024
-        thread.name = "inferno.qemu"
+        thread.name = "orchard.qemu"
         thread.qualityOfService = .userInitiated
         self.thread = thread
         thread.start()

@@ -33,7 +33,7 @@ final class SerialConsole: ObservableObject {
 
     private var handle: FileHandle?
     private var timer: DispatchSourceTimer?
-    private let queue = DispatchQueue(label: "inferno.serial")
+    private let queue = DispatchQueue(label: "orchard.serial")
     /// A long boot produces a lot; keep the tail.
     private let limit = 256 * 1024
     /// How much of the emulator's console log is allowed to sit on disk.

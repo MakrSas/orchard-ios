@@ -1,6 +1,6 @@
 /*
  * Guest display and input for an in-process embedder. See
- * include/ui/inferno-embed.h for why this exists.
+ * include/ui/orchard-embed.h for why this exists.
  *
  * Taken from Inferno-iOS's ui/inferno-embed.c and moved to this tree's console
  * API, which renamed what it calls: register_displaychangelistener is
@@ -31,7 +31,7 @@
 #include "qemu/main-loop.h"
 #include "qemu/thread.h"
 #include "ui/console.h"
-#include "ui/inferno-embed.h"
+#include "ui/orchard-embed.h"
 #include "ui/input.h"
 #include "ui/surface.h"
 #include "system/system.h"
@@ -45,7 +45,7 @@
  * listener callbacks already run under the big lock, which is why they may take
  * this one, and the reader never takes any lock but this.
  */
-typedef struct InfernoDisplay
+typedef struct OrchardDisplay
 {
     QemuMutex       lock;
     bool            lock_ready;
@@ -57,20 +57,20 @@ typedef struct InfernoDisplay
     uint32_t x0, y0, x1, y1;
     /* Whether the finger is down, so a press is sent only when it changes. */
     uint32_t buttons;
-} InfernoDisplay;
+} OrchardDisplay;
 
-static InfernoDisplay             inferno_display;
-static DisplayChangeListener      inferno_dcl;
+static OrchardDisplay             orchard_display;
+static DisplayChangeListener      orchard_dcl;
 
-/* Counted under the display's own lock; see InfernoDisplayStats. */
-static uint64_t inferno_presents;
-static uint64_t inferno_refreshes;
+/* Counted under the display's own lock; see OrchardDisplayStats. */
+static uint64_t orchard_presents;
+static uint64_t orchard_refreshes;
 /* Bench rig only: the spacing between frames, to tell a cap from a slow guest. */
-static int64_t  inferno_last_present_ns;
-static int64_t  inferno_gap_min_ns, inferno_gap_max_ns, inferno_gap_sum_ns;
-static uint64_t inferno_gap_count;
+static int64_t  orchard_last_present_ns;
+static int64_t  orchard_gap_min_ns, orchard_gap_max_ns, orchard_gap_sum_ns;
+static uint64_t orchard_gap_count;
 
-static void damage_all_locked(InfernoDisplay* d)
+static void damage_all_locked(OrchardDisplay* d)
 {
     if (d->surface == NULL) {
         d->dirty = false;
@@ -83,9 +83,9 @@ static void damage_all_locked(InfernoDisplay* d)
     d->y1    = surface_height(d->surface);
 }
 
-static void inferno_gfx_switch(DisplayChangeListener* dcl, DisplaySurface* surface)
+static void orchard_gfx_switch(DisplayChangeListener* dcl, DisplaySurface* surface)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
 
     QEMU_LOCK_GUARD(&d->lock);
     d->surface = surface;
@@ -93,9 +93,9 @@ static void inferno_gfx_switch(DisplayChangeListener* dcl, DisplaySurface* surfa
     damage_all_locked(d);
 }
 
-static void inferno_gfx_update(DisplayChangeListener* dcl, int x, int y, int w, int h)
+static void orchard_gfx_update(DisplayChangeListener* dcl, int x, int y, int w, int h)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
 
     if (w <= 0 || h <= 0) { return; }
 
@@ -120,72 +120,72 @@ static void inferno_gfx_update(DisplayChangeListener* dcl, int x, int y, int w, 
  * Nothing here draws; this is what drives the machine's own redraw, exactly as
  * a window or a VNC client would.
  */
-static void inferno_refresh(DisplayChangeListener* dcl)
+static void orchard_refresh(DisplayChangeListener* dcl)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
 
-    WITH_QEMU_LOCK_GUARD(&d->lock) { inferno_refreshes++; }
+    WITH_QEMU_LOCK_GUARD(&d->lock) { orchard_refreshes++; }
     qemu_console_hw_update(dcl->con);
 }
 
-void inferno_display_note_present(void)
+void orchard_display_note_present(void)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
 
     if (!d->attached) { return; }
     WITH_QEMU_LOCK_GUARD(&d->lock)
     {
         int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 
-        inferno_presents++;
-        if (inferno_last_present_ns != 0) {
-            int64_t gap = now - inferno_last_present_ns;
+        orchard_presents++;
+        if (orchard_last_present_ns != 0) {
+            int64_t gap = now - orchard_last_present_ns;
 
-            if (inferno_gap_count == 0 || gap < inferno_gap_min_ns) { inferno_gap_min_ns = gap; }
-            if (inferno_gap_count == 0 || gap > inferno_gap_max_ns) { inferno_gap_max_ns = gap; }
-            inferno_gap_sum_ns += gap;
-            inferno_gap_count++;
+            if (orchard_gap_count == 0 || gap < orchard_gap_min_ns) { orchard_gap_min_ns = gap; }
+            if (orchard_gap_count == 0 || gap > orchard_gap_max_ns) { orchard_gap_max_ns = gap; }
+            orchard_gap_sum_ns += gap;
+            orchard_gap_count++;
         }
-        inferno_last_present_ns = now;
+        orchard_last_present_ns = now;
     }
 }
 
-static void inferno_display_gaps(int64_t* min_ms, int64_t* mean_ms, int64_t* max_ms)
+static void orchard_display_gaps(int64_t* min_ms, int64_t* mean_ms, int64_t* max_ms)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
 
     QEMU_LOCK_GUARD(&d->lock);
-    *min_ms  = inferno_gap_count ? inferno_gap_min_ns / SCALE_MS : 0;
-    *max_ms  = inferno_gap_count ? inferno_gap_max_ns / SCALE_MS : 0;
-    *mean_ms = inferno_gap_count ? (inferno_gap_sum_ns / (int64_t)inferno_gap_count) / SCALE_MS : 0;
-    inferno_gap_count = inferno_gap_sum_ns = 0;
+    *min_ms  = orchard_gap_count ? orchard_gap_min_ns / SCALE_MS : 0;
+    *max_ms  = orchard_gap_count ? orchard_gap_max_ns / SCALE_MS : 0;
+    *mean_ms = orchard_gap_count ? (orchard_gap_sum_ns / (int64_t)orchard_gap_count) / SCALE_MS : 0;
+    orchard_gap_count = orchard_gap_sum_ns = 0;
 }
 
-void inferno_display_stats(InfernoDisplayStats* out)
+void orchard_display_stats(OrchardDisplayStats* out)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
 
     if (out == NULL) { return; }
     memset(out, 0, sizeof(*out));
     if (!d->attached) { return; }
 
     QEMU_LOCK_GUARD(&d->lock);
-    out->presents     = inferno_presents;
-    out->refreshes    = inferno_refreshes;
-    inferno_presents  = 0;
-    inferno_refreshes = 0;
+    out->presents     = orchard_presents;
+    out->refreshes    = orchard_refreshes;
+    orchard_presents  = 0;
+    orchard_refreshes = 0;
 }
 
-static const DisplayChangeListenerOps inferno_dcl_ops = {
-    .dpy_name       = "inferno-embed",
-    .dpy_refresh    = inferno_refresh,
-    .dpy_gfx_update = inferno_gfx_update,
-    .dpy_gfx_switch = inferno_gfx_switch,
+static const DisplayChangeListenerOps orchard_dcl_ops = {
+    .dpy_name       = "orchard-embed",
+    .dpy_refresh    = orchard_refresh,
+    .dpy_gfx_update = orchard_gfx_update,
+    .dpy_gfx_switch = orchard_gfx_switch,
 };
 
-void inferno_display_attach(void)
+void orchard_display_attach(void)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
     QemuConsole*    con;
 
     if (d->attached) { return; }
@@ -205,7 +205,7 @@ void inferno_display_attach(void)
     d->attached = true;
 
     /* Registering calls gfx_switch with the console's current surface, under d->lock. */
-    qemu_console_register_listener(con, &inferno_dcl, &inferno_dcl_ops);
+    qemu_console_register_listener(con, &orchard_dcl, &orchard_dcl_ops);
 
     /*
      * The console already has a surface by now — the machine drew its boot
@@ -219,12 +219,12 @@ void inferno_display_attach(void)
     }
 }
 
-void inferno_display_detach(void)
+void orchard_display_detach(void)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
 
     if (!d->attached) { return; }
-    qemu_console_unregister_listener(&inferno_dcl);
+    qemu_console_unregister_listener(&orchard_dcl);
     WITH_QEMU_LOCK_GUARD(&d->lock)
     {
         d->surface = NULL;
@@ -233,30 +233,30 @@ void inferno_display_detach(void)
     d->attached = false;
 }
 
-void inferno_display_invalidate(void)
+void orchard_display_invalidate(void)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
 
     if (!d->attached) { return; }
     QEMU_LOCK_GUARD(&d->lock);
     damage_all_locked(d);
 }
 
-InfernoFrameResult inferno_display_read(void* dst, size_t dst_size, InfernoFrameInfo* info)
+OrchardFrameResult orchard_display_read(void* dst, size_t dst_size, OrchardFrameInfo* info)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
     uint32_t        width, height, x0, y0, x1, y1, row;
     const uint8_t*  src;
     uint8_t*        out;
     int             src_stride;
     size_t          need, span;
 
-    if (info == NULL) { return INFERNO_FRAME_NONE; }
+    if (info == NULL) { return ORCHARD_FRAME_NONE; }
     memset(info, 0, sizeof(*info));
-    if (!d->attached) { return INFERNO_FRAME_NONE; }
+    if (!d->attached) { return ORCHARD_FRAME_NONE; }
 
     QEMU_LOCK_GUARD(&d->lock);
-    if (d->surface == NULL) { return INFERNO_FRAME_NONE; }
+    if (d->surface == NULL) { return ORCHARD_FRAME_NONE; }
 
     width  = surface_width(d->surface);
     height = surface_height(d->surface);
@@ -280,9 +280,9 @@ InfernoFrameResult inferno_display_read(void* dst, size_t dst_size, InfernoFrame
         info->w = width;
         info->h = height;
         damage_all_locked(d);
-        return INFERNO_FRAME_RESIZE;
+        return ORCHARD_FRAME_RESIZE;
     }
-    if (!d->dirty) { return INFERNO_FRAME_NONE; }
+    if (!d->dirty) { return ORCHARD_FRAME_NONE; }
 
     x0 = MIN(d->x0, width);
     y0 = MIN(d->y0, height);
@@ -290,7 +290,7 @@ InfernoFrameResult inferno_display_read(void* dst, size_t dst_size, InfernoFrame
     y1 = MIN(d->y1, height);
     if (x0 >= x1 || y0 >= y1) {
         d->dirty = false;
-        return INFERNO_FRAME_NONE;
+        return ORCHARD_FRAME_NONE;
     }
 
     src        = surface_data(d->surface);
@@ -308,16 +308,16 @@ InfernoFrameResult inferno_display_read(void* dst, size_t dst_size, InfernoFrame
     info->w  = x1 - x0;
     info->h  = y1 - y0;
     d->dirty = false;
-    return INFERNO_FRAME_OK;
+    return ORCHARD_FRAME_OK;
 }
 
 /* ------------------------------------------------------------------ */
 /* Input                                                               */
 /* ------------------------------------------------------------------ */
 
-void inferno_input_touch(int32_t x, int32_t y, bool pressed)
+void orchard_input_touch(int32_t x, int32_t y, bool pressed)
 {
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
     QemuConsole*    con;
     uint32_t        width = 0, height = 0;
     bool            was = false;
@@ -337,7 +337,7 @@ void inferno_input_touch(int32_t x, int32_t y, bool pressed)
     x = MAX(0, MIN((int32_t)width - 1, x));
     y = MAX(0, MIN((int32_t)height - 1, y));
 
-    con = inferno_dcl.con;
+    con = orchard_dcl.con;
     bql_lock();
     qemu_input_queue_abs(con, INPUT_AXIS_X, x, 0, width);
     qemu_input_queue_abs(con, INPUT_AXIS_Y, y, 0, height);
@@ -356,10 +356,10 @@ void inferno_input_touch(int32_t x, int32_t y, bool pressed)
  * scrolls up). Only buttons whose state changed are sent, so holding one
  * across moves is a drag.
  */
-void inferno_input_pointer(int32_t x, int32_t y, uint32_t buttons, int32_t wheel)
+void orchard_input_pointer(int32_t x, int32_t y, uint32_t buttons, int32_t wheel)
 {
     static const InputButton map[2] = { INPUT_BUTTON_LEFT, INPUT_BUTTON_RIGHT };
-    InfernoDisplay* d = &inferno_display;
+    OrchardDisplay* d = &orchard_display;
     QemuConsole*    con;
     uint32_t        width = 0, height = 0, was = 0;
     int             i;
@@ -379,7 +379,7 @@ void inferno_input_pointer(int32_t x, int32_t y, uint32_t buttons, int32_t wheel
     x = MAX(0, MIN((int32_t)width - 1, x));
     y = MAX(0, MIN((int32_t)height - 1, y));
 
-    con = inferno_dcl.con;
+    con = orchard_dcl.con;
     bql_lock();
     qemu_input_queue_abs(con, INPUT_AXIS_X, x, 0, width);
     qemu_input_queue_abs(con, INPUT_AXIS_Y, y, 0, height);
@@ -399,7 +399,7 @@ void inferno_input_pointer(int32_t x, int32_t y, uint32_t buttons, int32_t wheel
     bql_unlock();
 }
 
-void inferno_input_function_key(uint32_t number, bool pressed)
+void orchard_input_function_key(uint32_t number, bool pressed)
 {
     /* Evdev codes: F1..F10 are contiguous, F11 and F12 are not. */
     static const unsigned int keys[] = {
@@ -414,7 +414,7 @@ void inferno_input_function_key(uint32_t number, bool pressed)
     bql_unlock();
 }
 
-void inferno_input_key_hid(uint32_t usage, bool pressed)
+void orchard_input_key_hid(uint32_t usage, bool pressed)
 {
     unsigned int lnx;
 
@@ -424,7 +424,7 @@ void inferno_input_key_hid(uint32_t usage, bool pressed)
     if (lnx == 0) { return; }
 
     bql_lock();
-    qemu_input_event_send_key_linux(inferno_dcl.con, lnx, pressed);
+    qemu_input_event_send_key_linux(orchard_dcl.con, lnx, pressed);
     bql_unlock();
 }
 
@@ -440,7 +440,7 @@ void inferno_input_key_hid(uint32_t usage, bool pressed)
  * Queued together, the release is behind the press in the same queue and the
  * guest reads it on its next poll.
  */
-void inferno_input_key_tap(uint32_t usage, uint32_t mods)
+void orchard_input_key_tap(uint32_t usage, uint32_t mods)
 {
     static const uint32_t modifier_usage[] = { 0xE1 /* LeftShift */, 0xE3 /* LeftGUI */ };
     unsigned int lnx, mod_lnx[2];
@@ -456,14 +456,14 @@ void inferno_input_key_tap(uint32_t usage, uint32_t mods)
     bql_lock();
     for (i = 0; i < 2; i++) {
         if ((mods & (1u << i)) && mod_lnx[i]) {
-            qemu_input_event_send_key_linux(inferno_dcl.con, mod_lnx[i], true);
+            qemu_input_event_send_key_linux(orchard_dcl.con, mod_lnx[i], true);
         }
     }
-    qemu_input_event_send_key_linux(inferno_dcl.con, lnx, true);
-    qemu_input_event_send_key_linux(inferno_dcl.con, lnx, false);
+    qemu_input_event_send_key_linux(orchard_dcl.con, lnx, true);
+    qemu_input_event_send_key_linux(orchard_dcl.con, lnx, false);
     for (i = 1; i >= 0; i--) {
         if ((mods & (1u << i)) && mod_lnx[i]) {
-            qemu_input_event_send_key_linux(inferno_dcl.con, mod_lnx[i], false);
+            qemu_input_event_send_key_linux(orchard_dcl.con, mod_lnx[i], false);
         }
     }
     bql_unlock();
@@ -480,17 +480,17 @@ void inferno_input_key_tap(uint32_t usage, uint32_t mods)
  * frame rate cannot be measured outside the app -- which is exactly what a
  * comparison between two builds of the emulator needs.
  *
- * INFERNO_HEADLESS_FPS=1 attaches the same listener from inside the emulator
+ * ORCHARD_HEADLESS_FPS=1 attaches the same listener from inside the emulator
  * and reads frames the way the app's pump does, then prints a line a second:
  *
- *   INFERNO-FPS <second> presents=<n> refreshes=<n>
+ *   ORCHARD-FPS <second> presents=<n> refreshes=<n>
  *
  * Off unless the variable is set, so nothing changes for the app.
  */
-static void* inferno_headless_pump(void* arg)
+static void* orchard_headless_pump(void* arg)
 {
-    InfernoFrameInfo  info;
-    InfernoDisplayStats stats;
+    OrchardFrameInfo  info;
+    OrchardDisplayStats stats;
     void*             buf  = NULL;
     size_t            size = 0;
     int64_t           next;
@@ -499,7 +499,7 @@ static void* inferno_headless_pump(void* arg)
 
     next = qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + 1000;
     for (;;) {
-        if (inferno_display_read(buf, size, &info) == INFERNO_FRAME_RESIZE) {
+        if (orchard_display_read(buf, size, &info) == ORCHARD_FRAME_RESIZE) {
             g_free(buf);
             size = (size_t)info.width * info.height * 4;
             buf  = g_malloc0(size);
@@ -508,10 +508,10 @@ static void* inferno_headless_pump(void* arg)
         if (qemu_clock_get_ms(QEMU_CLOCK_REALTIME) < next) { continue; }
         next += 1000;
         second++;
-        inferno_display_stats(&stats);
-        inferno_display_gaps(&gmin, &gmean, &gmax);
+        orchard_display_stats(&stats);
+        orchard_display_gaps(&gmin, &gmean, &gmax);
         fprintf(stderr,
-                "INFERNO-FPS %" PRIu64 " presents=%" PRIu64 " refreshes=%" PRIu64 " gap=%" PRId64 "/%" PRId64 "/%"
+                "ORCHARD-FPS %" PRIu64 " presents=%" PRIu64 " refreshes=%" PRIu64 " gap=%" PRId64 "/%" PRId64 "/%"
                 PRId64 "ms\n",
                 second, stats.presents, stats.refreshes, gmin, gmean, gmax);
         fflush(stderr);
@@ -519,17 +519,17 @@ static void* inferno_headless_pump(void* arg)
     return NULL;
 }
 
-static void inferno_headless_start(Notifier* n, void* opaque)
+static void orchard_headless_start(Notifier* n, void* opaque)
 {
     static QemuThread thread;
 
-    if (g_strcmp0(getenv("INFERNO_HEADLESS_FPS"), "1") != 0) { return; }
+    if (g_strcmp0(getenv("ORCHARD_HEADLESS_FPS"), "1") != 0) { return; }
 
-    inferno_display_attach();
-    qemu_thread_create(&thread, "inferno.fps", inferno_headless_pump, NULL, QEMU_THREAD_DETACHED);
+    orchard_display_attach();
+    qemu_thread_create(&thread, "orchard.fps", orchard_headless_pump, NULL, QEMU_THREAD_DETACHED);
 }
 
-static Notifier inferno_headless_notifier = {.notify = inferno_headless_start};
+static Notifier orchard_headless_notifier = {.notify = orchard_headless_start};
 
-static void __attribute__((constructor)) inferno_headless_register(void)
-{ qemu_add_machine_init_done_notifier(&inferno_headless_notifier); }
+static void __attribute__((constructor)) orchard_headless_register(void)
+{ qemu_add_machine_init_done_notifier(&orchard_headless_notifier); }

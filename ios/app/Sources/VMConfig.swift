@@ -8,8 +8,8 @@ import Foundation
 /// app's Documents, dropped in over the Files app; `scripts/utm-to-orchard.py`
 /// makes that folder out of a UTM virtual machine.
 ///
-/// The iPhone half of this type (`InfernoData`, the SEP ROM, the restore
-/// firmware) is the app shell's inheritance from Inferno-iOS. It is not used to
+/// The iPhone half of this type (`iPhoneData`, the SEP ROM, the restore
+/// firmware) is what the app shell inherited from its iPhone past. It is not used to
 /// start anything any more, and stays only because the restore screens still
 /// compile against it; it goes when they do.
 struct VMConfig {
@@ -71,13 +71,13 @@ struct VMConfig {
     static var documents: URL {
         let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         #if os(macOS)
-        return base.appendingPathComponent("Inferno")
+        return base.appendingPathComponent("Orchard")
         #else
         return base
         #endif
     }
 
-    static var dataDirectory: URL { documents.appendingPathComponent("InfernoData") }
+    static var dataDirectory: URL { documents.appendingPathComponent("iPhoneData") }
 
     // MARK: The macOS virtual machine
 
@@ -165,7 +165,7 @@ struct VMConfig {
     }
     /// Where the emulator must chdir to before the sockets below resolve.
     static var socketDirectory: String { NSTemporaryDirectory() }
-    static let usbSocketName = "inferno-usb.sock"
+    static let usbSocketName = "orchard-usb.sock"
     /// Everything the guest prints, from the first byte, kept on disk.
     static var guestConsoleLog: URL { documents.appendingPathComponent("guest-console.log") }
     static var sepROM: URL { documents.appendingPathComponent("AppleSEPROM-Cebu-B1") }
@@ -337,16 +337,16 @@ struct VMConfig {
 
     /// Everything the machine needs on disk, in the order a person should fix it.
     static let requiredFiles: [(label: String, relativePath: String)] = [
-        (L("Прошивка NVMe"), "InfernoData/firmware"),
-        ("syscfg", "InfernoData/syscfg"),
-        ("ctrl_bits", "InfernoData/ctrl_bits"),
-        ("nvram", "InfernoData/nvram"),
-        ("effaceable", "InfernoData/effaceable"),
-        ("panic_log", "InfernoData/panic_log"),
-        ("SEP nvram", "InfernoData/sep_nvram"),
-        ("SEP ssc", "InfernoData/sep_ssc"),
-        (L("Тикет"), "InfernoData/root_ticket.der"),
-        (L("Прошивка SEP"), "InfernoData/sep-firmware.n104.RELEASE.new.img4"),
+        (L("Прошивка NVMe"), "iPhoneData/firmware"),
+        ("syscfg", "iPhoneData/syscfg"),
+        ("ctrl_bits", "iPhoneData/ctrl_bits"),
+        ("nvram", "iPhoneData/nvram"),
+        ("effaceable", "iPhoneData/effaceable"),
+        ("panic_log", "iPhoneData/panic_log"),
+        ("SEP nvram", "iPhoneData/sep_nvram"),
+        ("SEP ssc", "iPhoneData/sep_ssc"),
+        (L("Тикет"), "iPhoneData/root_ticket.der"),
+        (L("Прошивка SEP"), "iPhoneData/sep-firmware.n104.RELEASE.new.img4"),
         ("SEP ROM", "AppleSEPROM-Cebu-B1"),
     ]
 
@@ -388,7 +388,7 @@ struct VMConfig {
     }
 
     /// The kernel's command line. A Mac can be handed another one for a single
-    /// run — `open Inferno.app --args -bootArgs "…"` — which is how a boot
+    /// run — `open Orchard.app --args -bootArgs "…"` — which is how a boot
     /// argument is tried without a rebuild; a launch argument lives only in
     /// that process's defaults and is never saved.
     ///
@@ -466,7 +466,7 @@ struct VMConfig {
         if headless || builtInDisplay {
             // Nothing for the emulator to serve: either there is no screen at
             // all, or the app reads the framebuffer directly once the machine
-            // is up (ui/inferno-embed.c).
+            // is up (ui/orchard-embed.c).
             argv += ["-display", "none"]
         }
         else {
