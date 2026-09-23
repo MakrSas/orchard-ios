@@ -309,7 +309,22 @@ static uint64_t pauth_computepac_architected(uint64_t data, uint64_t modifier,
 static uint64_t pauth_computepac_impdef(uint64_t data, uint64_t modifier,
                                         ARMPACKey key)
 {
-    return qemu_xxhash64_4(data, modifier, key.lo, key.hi);
+    /*
+     * Two multiply-xorshift rounds rather than xxhash64 over four words.
+     *
+     * The implementation-defined algorithm only has to agree with itself:
+     * every signature this CPU makes, it also checks, and the keys are
+     * written by the guest at each boot, so no stored pointer was ever
+     * signed by anything else. It need not be strong, only well mixed, so
+     * that a corrupted pointer still fails its check. Measured on an iPhone
+     * running a macOS guest under TCG, xxhash here was 11 % of all CPU
+     * time: the kernel signs or authenticates on nearly every call and
+     * return.
+     */
+    uint64_t h = (data ^ key.lo) * 0x9e3779b97f4a7c15ull;
+    h ^= modifier ^ key.hi;
+    h = (h ^ (h >> 31)) * 0xd6e8feb86659fd93ull;
+    return h ^ (h >> 32);
 }
 
 static uint64_t pauth_computepac(CPUARMState *env, uint64_t data,
@@ -335,12 +350,59 @@ static uint64_t pauth_computepac(CPUARMState *env, uint64_t data,
     }
 }
 
+/*
+ * The address-space parameters every PAC instruction needs, cached.
+ *
+ * A signed-pointer instruction needs three fields of aa64_va_parameters() —
+ * tsz, tbi and mtx — and computing all of them each time was measured as the
+ * largest single cost around PAC on an iPhone running a macOS guest under
+ * TCG, where the kernel signs or authenticates on every call and return.
+ *
+ * For a fixed CPU, the result depends only on the regime's TCR value, the
+ * MMU index, bit 55 of the address and whether the pointer is data; the key
+ * holds all four, and the TCR value is read afresh each time, so a changed
+ * TCR simply misses. (aa64_va_parameters also reads TCR2/SCR/HCRX, but only
+ * for PIE/AIE, which PAC never looks at.) Thread-local: under MTTCG each
+ * vCPU runs on its own thread, and a thread that runs several vCPUs is still
+ * exact because the key does not depend on which one it is.
+ */
+typedef struct PauthVACacheEntry {
+    uint64_t tcr;
+    int mmu_idx;
+    bool valid;
+    bool select;
+    bool data;
+    ARMVAParameters param;
+} PauthVACacheEntry;
+
+static __thread PauthVACacheEntry pauth_va_cache[16];
+
+static ARMVAParameters pauth_va_parameters(CPUARMState *env, uint64_t ptr,
+                                           ARMMMUIdx mmu_idx, bool data)
+{
+    uint64_t tcr = regime_tcr(env, mmu_idx);
+    bool select = extract64(ptr, 55, 1);
+    PauthVACacheEntry *e =
+        &pauth_va_cache[((mmu_idx & 3) << 2 | select << 1 | data) & 15];
+
+    if (!e->valid || e->tcr != tcr || e->mmu_idx != mmu_idx
+        || e->select != select || e->data != data) {
+        e->param = aa64_va_parameters(env, ptr, mmu_idx, data, false);
+        e->tcr = tcr;
+        e->mmu_idx = mmu_idx;
+        e->select = select;
+        e->data = data;
+        e->valid = true;
+    }
+    return e->param;
+}
+
 static uint64_t pauth_addpac(CPUARMState *env, uint64_t ptr, uint64_t modifier,
                              ARMPACKey *key, bool data)
 {
     ARMCPU *cpu = env_archcpu(env);
     ARMMMUIdx mmu_idx = arm_stage1_mmu_idx(env);
-    ARMVAParameters param = aa64_va_parameters(env, ptr, mmu_idx, data, false);
+    ARMVAParameters param = pauth_va_parameters(env, ptr, mmu_idx, data);
     ARMPauthFeature pauth_feature = cpu_isar_feature(pauth_feature, cpu);
     uint64_t pac, ext_ptr, ext, test;
     int bot_bit, top_bit;
@@ -434,7 +496,7 @@ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
 {
     ARMCPU *cpu = env_archcpu(env);
     ARMMMUIdx mmu_idx = arm_stage1_mmu_idx(env);
-    ARMVAParameters param = aa64_va_parameters(env, ptr, mmu_idx, data, false);
+    ARMVAParameters param = pauth_va_parameters(env, ptr, mmu_idx, data);
     ARMPauthFeature pauth_feature = cpu_isar_feature(pauth_feature, cpu);
     int bot_bit, top_bit;
     uint64_t pac, orig_ptr, cmp_mask;
@@ -477,7 +539,7 @@ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
 static uint64_t pauth_strip(CPUARMState *env, uint64_t ptr, bool data)
 {
     ARMMMUIdx mmu_idx = arm_stage1_mmu_idx(env);
-    ARMVAParameters param = aa64_va_parameters(env, ptr, mmu_idx, data, false);
+    ARMVAParameters param = pauth_va_parameters(env, ptr, mmu_idx, data);
 
     return pauth_original_ptr(ptr, param);
 }
