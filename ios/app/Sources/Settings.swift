@@ -241,6 +241,11 @@ final class Settings: ObservableObject {
         willSet { objectWillChange.send() }
     }
 
+    /// The Shared folder over WebDAV for the guest (SharedFolder.swift).
+    @AppStorage("sharedFolder") var sharedFolder: Bool = true {
+        willSet { objectWillChange.send() }
+    }
+
     @AppStorage("language") var language: String = AppLanguage.system.rawValue {
         willSet { objectWillChange.send() }
     }
@@ -622,6 +627,19 @@ private struct NetworkSettings: View {
                     Toggle(L("Интернет"), isOn: $settings.network)
                 } footer: {
                     Text(L("Сетевая карта virtio-net, за ней NAT внутри эмулятора (slirp): гость получает адрес по DHCP и выходит в сеть через сеть телефона. Снаружи к гостю не подключиться. Применяется при запуске машины."))
+                }
+                Section {
+                    Toggle(L("Общая папка"), isOn: $settings.sharedFolder)
+                        .onChange(of: settings.sharedFolder) { on in
+                            if on { SharedFolder.shared.start() } else { SharedFolder.shared.stop() }
+                        }
+                    if settings.sharedFolder {
+                        LabeledContent(L("Адрес в госте"), value: SharedFolder.guestURL)
+                            .font(.footnote.monospaced())
+                            .textSelection(.enabled)
+                    }
+                } footer: {
+                    Text(L("Папка Shared в «Файлах» → Orchard видна гостю по сети: в Finder гостя «Переход → Подключение к серверу» (⌘K), адрес http://10.0.2.2:8080, «Подключиться» и вход как гость. Работает в обе стороны: что положили на телефоне — видно в госте, и наоборот. Скорость — как у сети гостя, порядка 15 МБ/с."))
                 }
             } else {
                 Section {

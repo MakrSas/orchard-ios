@@ -42,6 +42,14 @@ enum L10n {
     /// anyone who had chosen English, with a black screen and an empty log.
     /// Built from an array, a repeat is just a repeat and the first one wins.
     private static let pairs: [(String, String)] = [
+        // Shared folder
+        ("Общая папка", "Shared folder"),
+        ("Адрес в госте", "Address in the guest"),
+        ("Папка Shared в «Файлах» → Orchard видна гостю по сети: в Finder гостя «Переход → Подключение к серверу» (⌘K), адрес http://10.0.2.2:8080, «Подключиться» и вход как гость. Работает в обе стороны: что положили на телефоне — видно в госте, и наоборот. Скорость — как у сети гостя, порядка 15 МБ/с.",
+            "The Shared folder in Files → Orchard is visible to the guest over the network: in the guest's Finder, Go → Connect to Server (⌘K), address http://10.0.2.2:8080, Connect, and sign in as Guest. It works both ways: what you put in it on the phone shows up in the guest, and the other way round. As fast as the guest's network, around 15 MB/s."),
+        ("Общая папка: не удалось открыть сокет", "Shared folder: could not open a socket"),
+        ("Общая папка: порт %d занят", "Shared folder: port %d is in use"),
+        ("Общая папка: %@ (папка Shared в «Файлах»)", "Shared folder: %@ (the Shared folder in Files)"),
         // The macOS guest's own screens, missing until the second audit
         ("CPU: QMP не прислал приветствие", "CPU: QMP sent no greeting"),
         ("CPU: QMP не принял qmp_capabilities", "CPU: QMP refused qmp_capabilities"),

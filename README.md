@@ -87,6 +87,15 @@ Tap the round button in the corner and choose **Start**. The first boot to
 the login window takes several minutes. A machine that has stopped cannot be
 started again in the same run: close the app and open it again.
 
+## Sharing files with the guest
+
+Put files in **Files → On My iPhone → Orchard → Shared**, and in the guest's
+Finder choose **Go → Connect to Server** (⌘K), enter
+`http://10.0.2.2:8080`, **Connect**, and sign in as **Guest**. The folder is
+mounted in the guest like a network drive and works both ways. It goes
+through the guest's network, around 15 MB/s. It can be turned off in
+**Settings… → Network**.
+
 ## Building from source
 
 On a Mac with Xcode (and its iPhoneOS SDK), [rustup](https://rustup.rs) and

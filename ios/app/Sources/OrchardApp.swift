@@ -173,6 +173,9 @@ final class VMModel: ObservableObject {
     func start() {
         refreshFiles()
         refreshJIT()
+        if VMConfig.macGuest && Settings.shared.sharedFolder {
+            SharedFolder.shared.start()
+        }
         // Said out loud, and into the log. The button is disabled in this case,
         // so from outside it is "I press Start and nothing happens" — and the
         // log people send with that report has nothing in it at all.
