@@ -98,6 +98,20 @@ private final class DAVConnection {
     private let root: URL
     private var buffer = [UInt8]()
     private var start = 0          // read position in `buffer`
+    private var current = ""       // "METHOD /path depth", for the log
+
+    /// Every request and its status go to the emulator log, up to a limit:
+    /// when the guest's WebDAV client refuses to mount, the only account of
+    /// why is what it asked and what it was told.
+    private static var logged = 0
+    private static let logLock = NSLock()
+    private static func log(_ line: String) {
+        logLock.lock()
+        defer { logLock.unlock() }
+        guard logged < 400 else { return }
+        logged += 1
+        LogCapture.shared.note("DAV " + line)
+    }
 
     init(fd: Int32, root: URL) {
         self.fd = fd
@@ -224,6 +238,7 @@ private final class DAVConnection {
     private func respond(_ status: Int, _ reason: String, headers: [String: String] = [:],
                          body: String = "", keepAlive: Bool) {
         let bytes = Array(body.utf8)
+        Self.log("\(current) → \(status)")
         var head = "HTTP/1.1 \(status) \(reason)\r\n"
         head += "Content-Length: \(bytes.count)\r\n"
         head += "Date: \(Self.httpDate(Date()))\r\n"
@@ -239,6 +254,7 @@ private final class DAVConnection {
 
     /// Serves one request; returns whether the connection stays open.
     private func handle(_ r: Request) -> Bool {
+        current = "\(r.method) \(r.path)" + (r.header("depth").map { " depth=\($0)" } ?? "")
         let keepAlive = r.header("connection")?.lowercased() != "close" && r.version != "HTTP/1.0"
         guard let url = resolve(r.path) else {
             _ = discardBody(r)
@@ -393,6 +409,7 @@ private final class DAVConnection {
             }
         }
         let length = size == 0 ? 0 : last - first + 1
+        Self.log("\(current) → \(status.0) \(length) bytes")
         var head = "HTTP/1.1 \(status.0) \(status.1)\r\n"
         head += "Content-Length: \(length)\r\n"
         head += "Content-Type: application/octet-stream\r\n"
