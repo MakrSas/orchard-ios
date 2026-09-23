@@ -48,6 +48,10 @@ enum L10n {
         ("Звук: в этой сборке библиотеки нет звукового вывода", "Sound: this build of the library has no audio output"),
         ("Звук: вывод гостя включён (%d Гц)", "Sound: guest output on (%d Hz)"),
         ("Звук: не удалось запустить вывод — %@", "Sound: could not start the output — %@"),
+        ("Звук: гость прислал %@, не тишина — %@ сэмплов, телефон забрал %@, вывод %@",
+            "Sound: the guest sent %@, %@ samples not silence, the phone took %@, output %@"),
+        ("работает", "running"),
+        ("остановлен", "stopped"),
         // Shared folder
         ("Общая папка", "Shared folder"),
         ("Адрес в госте", "Address in the guest"),

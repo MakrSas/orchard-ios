@@ -17,7 +17,11 @@ final class GuestSound {
     private typealias ReadFn = @convention(c) (UnsafeMutableRawPointer, Int) -> Int
     private typealias FormatFn = @convention(c) (UnsafeMutablePointer<UInt32>, UnsafeMutablePointer<UInt32>) -> Void
 
+    private typealias StatsFn = @convention(c) (UnsafeMutablePointer<UInt64>, UnsafeMutablePointer<UInt64>,
+                                                UnsafeMutablePointer<UInt64>) -> Void
+
     private var engine: AVAudioEngine?
+    private var statsTimer: Timer?
     /// Interleaved 16-bit samples from the ring; sized once, off the audio thread.
     private var scratch = [Int16](repeating: 0, count: 8192 * 2)
 
@@ -71,13 +75,37 @@ final class GuestSound {
             try engine.start()
             self.engine = engine
             LogCapture.shared.note(L("Звук: вывод гостя включён (%d Гц)", Int(rate)))
+            startStats()
         } catch {
             LogCapture.shared.note(L("Звук: не удалось запустить вывод — %@", error.localizedDescription))
         }
     }
 
     func stop() {
+        statsTimer?.invalidate()
+        statsTimer = nil
         engine?.stop()
         engine = nil
+    }
+
+    /// Every 10 s, when anything moved: what the guest sent, what was not
+    /// silence, and what the phone played.
+    private func startStats() {
+        guard let sym = QemuBridge.shared.symbol("orchard_audio_stats") else { return }
+        let stats = unsafeBitCast(sym, to: StatsFn.self)
+        var last: (UInt64, UInt64, UInt64) = (0, 0, 0)
+        let timer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
+            var w: UInt64 = 0, r: UInt64 = 0, loud: UInt64 = 0
+            stats(&w, &r, &loud)
+            guard (w, r, loud) != last else { return }
+            last = (w, r, loud)
+            let running = self?.engine?.isRunning == true
+            LogCapture.shared.note(L("Звук: гость прислал %@, не тишина — %@ сэмплов, телефон забрал %@, вывод %@",
+                                     String(format: "%.1f КБ", Double(w) / 1024), String(loud),
+                                     String(format: "%.1f КБ", Double(r) / 1024),
+                                     running ? L("работает") : L("остановлен")))
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        statsTimer = timer
     }
 }

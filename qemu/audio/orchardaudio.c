@@ -56,6 +56,21 @@ typedef struct OrchardVoiceIn {
 static uint8_t orchard_ring[ORCHARD_AUDIO_RING];
 static uint64_t orchard_head;   /* bytes ever written; producer only */
 static uint64_t orchard_tail;   /* bytes ever read; consumer, or producer on overrun */
+static uint64_t orchard_read_total;     /* bytes the app actually took */
+static uint64_t orchard_loud_total;     /* samples written that were not silence */
+
+/*
+ * Totals for the app's log: bytes the guest's sound card sent, bytes the app
+ * took, and how many of the samples sent were not zero — telling "the guest
+ * plays nothing" from "the guest plays silence" from "nobody reads".
+ */
+void orchard_audio_stats(uint64_t *written, uint64_t *read, uint64_t *loud);
+void orchard_audio_stats(uint64_t *written, uint64_t *read, uint64_t *loud)
+{
+    *written = qatomic_read(&orchard_head);
+    *read = qatomic_read(&orchard_read_total);
+    *loud = qatomic_read(&orchard_loud_total);
+}
 
 /* The format orchard_audio_read() returns: rate and channel count. */
 void orchard_audio_format(uint32_t *rate, uint32_t *channels);
@@ -83,12 +98,20 @@ size_t orchard_audio_read(void *dst, size_t bytes)
     memcpy((uint8_t *)dst + first, orchard_ring, n - first);
     /* Only moves forward: an overrun on the other side may have moved it further. */
     qatomic_cmpxchg(&orchard_tail, tail, tail + n);
+    qatomic_set(&orchard_read_total, qatomic_read(&orchard_read_total) + n);
     return n;
 }
 
 static void orchard_ring_put(const uint8_t *src, size_t len)
 {
     uint64_t head = orchard_head;
+    const int16_t *samples = (const int16_t *)src;
+    uint64_t loud = 0;
+
+    for (size_t i = 0; i < len / 2; i++) {
+        loud += samples[i] != 0;
+    }
+    qatomic_set(&orchard_loud_total, orchard_loud_total + loud);
 
     if (len > ORCHARD_AUDIO_RING) {
         src += len - ORCHARD_AUDIO_RING;
