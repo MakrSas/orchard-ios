@@ -186,6 +186,9 @@ static void audio_create_pdos(Audiodev *dev)
         break
 
         CASE(NONE, none, );
+#ifdef CONFIG_ORCHARD_EMBED
+        CASE(ORCHARD, orchard, );
+#endif
 #ifdef CONFIG_AUDIO_ALSA
         CASE(ALSA, alsa, Alsa);
 #endif
@@ -316,6 +319,10 @@ static AudiodevPerDirectionOptions *audio_get_pdo_out(Audiodev *dev)
     case AUDIODEV_DRIVER_SPICE:
         return dev->u.spice.out;
 #endif
+#ifdef CONFIG_ORCHARD_EMBED
+    case AUDIODEV_DRIVER_ORCHARD:
+        return dev->u.orchard.out;
+#endif
     case AUDIODEV_DRIVER_WAV:
         return dev->u.wav.out;
 
@@ -374,6 +381,10 @@ static AudiodevPerDirectionOptions *audio_get_pdo_in(Audiodev *dev)
 #ifdef CONFIG_SPICE
     case AUDIODEV_DRIVER_SPICE:
         return dev->u.spice.in;
+#endif
+#ifdef CONFIG_ORCHARD_EMBED
+    case AUDIODEV_DRIVER_ORCHARD:
+        return dev->u.orchard.in;
 #endif
     case AUDIODEV_DRIVER_WAV:
         return dev->u.wav.in;

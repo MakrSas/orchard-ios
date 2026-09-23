@@ -386,6 +386,10 @@ AudiodevPerDirectionOptions *glue(audio_get_pdo_, TYPE)(Audiodev *dev)
     case AUDIODEV_DRIVER_SPICE:
         return dev->u.spice.TYPE;
 #endif
+#ifdef CONFIG_ORCHARD_EMBED
+    case AUDIODEV_DRIVER_ORCHARD:
+        return dev->u.orchard.TYPE;
+#endif
     case AUDIODEV_DRIVER_WAV:
         return dev->u.wav.TYPE;
 
