@@ -20,6 +20,7 @@
 #include "qom/object.h"
 #include "system/tcg.h"
 #include "hw/vmapple/apple_vm_cpu.h"
+#include "target/arm/cpu.h"
 
 static void apple_vm_cpu_initfn(Object *obj)
 {
@@ -27,6 +28,9 @@ static void apple_vm_cpu_initfn(Object *obj)
      * The parent (`max`) instance_init has already enabled the full feature
      * set. Apple-VM-specific instance tweaks go here.
      */
+    /* 16 KiB target pages, as the machine asks; see apple_vm_page_bits(). */
+    ARM_CPU(obj)->min_page_bits = apple_vm_page_bits();
+
     if (tcg_enabled()) {
         /*
          * PAC is a no-op by default: cheap under TCG, and the kernelcache we

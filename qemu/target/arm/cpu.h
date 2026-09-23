@@ -1170,6 +1170,12 @@ struct ArchCPU {
      * Once finalized, the values should be read from ID_AA64*.
      */
     bool prop_pauth;
+    /*
+     * The smallest page size, as a shift, this CPU asks the system for; 0 for
+     * the architectural minimum. A board whose guest only ever uses larger
+     * pages sets it, so the softmmu TLB is not split finer than needed.
+     */
+    uint8_t min_page_bits;
     bool prop_pauth_impdef;
     bool prop_pauth_qarma3;
     bool prop_pauth_qarma5;

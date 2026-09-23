@@ -2148,6 +2148,7 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
              */
             pagebits = 10;
         }
+        pagebits = MAX(pagebits, cpu->min_page_bits);
         if (!set_preferred_target_page_bits(pagebits)) {
             /*
              * This can only ever happen for hotplugging a CPU, or if

@@ -919,6 +919,8 @@ static void apple_vm_machine_class_init(ObjectClass *oc, const void *data)
     /* Parent (vmapple) class_init has already run; override only the CPU. */
     mc->default_cpu_type = TYPE_APPLE_VM_CPU;
     mc->desc = "Apple aarch64 Virtual Machine (Orchard, custom CPU)";
+    /* 16 KiB target pages; see apple_vm_page_bits(). */
+    mc->minimum_page_bits = apple_vm_page_bits();
 
     /*
      * machine_class_base_init() gives every non-abstract machine class a
