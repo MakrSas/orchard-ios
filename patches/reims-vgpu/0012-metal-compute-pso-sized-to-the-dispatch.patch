@@ -1,0 +1,96 @@
+Subject: [PATCH] metal: compile a compute pipeline for the threadgroup size the guest dispatches
+
+The driver picks a compute pipeline's maxTotalThreadsPerThreadgroup from the
+kernel's register use, and it differs between GPUs. Measured on an iPhone
+(A16): a guest kernel dispatched 1024-wide came back limited to 704, and the
+dispatch was refused with metal_compute_threadgroup_limit_exceeded — work a
+guest application was waiting on, never done.
+
+When a dispatch needs more than the pipeline allows, the kernel is compiled
+again with maxTotalThreadsPerThreadgroup set to the size the guest asked for,
+which makes the compiler fit it (spilling registers if it must). The result
+is kept in a cache of its own, since the main one matches on blob and stage
+input only. If the driver still cannot, the dispatch is refused as before.
+metal_compute_pso_sized reports each attempt.
+
+diff --git a/crates/reims-vgpu/src/backend/metal/compute.rs b/crates/reims-vgpu/src/backend/metal/compute.rs
+index fe4a71b8..96e369f7 100644
+--- a/crates/reims-vgpu/src/backend/metal/compute.rs
++++ b/crates/reims-vgpu/src/backend/metal/compute.rs
+@@ -62,6 +62,58 @@ fn new_compute_pipeline_state_uncached(
+     }
+ }
+ 
++/// A compute pipeline compiled to take `threads` per threadgroup.
++///
++/// Without a hint the driver picks the limit from the kernel's register use,
++/// and it differs between GPUs: measured on an iPhone (A16), a guest kernel a
++/// Mac runs 1024-wide came back limited to 704, and the dispatch was refused —
++/// work a guest application was waiting on, never done. Asking for the size the
++/// guest dispatches makes the compiler fit it, spilling registers if it must;
++/// the hardware takes up to 1024. `None` when the driver still cannot, and the
++/// caller refuses the dispatch as before.
++///
++/// Kept apart from the main cache, whose entries match on blob and stage input
++/// only: the same kernel compiled for two sizes is two pipelines.
++fn sized_compute_pipeline_state(
++    device: &Device,
++    function: &Function,
++    mtlb: &[u8],
++    stage_input: Option<&ReimsVgpuComputeStageInputDescriptor>,
++    threads: u64,
++) -> Option<ComputePipelineState> {
++    use parking_lot::Mutex;
++    static SIZED: Mutex<Vec<(u64, u64, u64, ComputePipelineState)>> = Mutex::new(Vec::new());
++    let blob = hash_bytes(mtlb);
++    let stage = hash_compute_stage_input(stage_input);
++    if let Some((.., pso)) = SIZED
++        .lock()
++        .iter()
++        .find(|(b, s, t, _)| *b == blob && *s == stage && *t == threads)
++    {
++        return Some(pso.clone());
++    }
++    let descriptor = ComputePipelineDescriptor::new();
++    descriptor.set_compute_function(Some(function));
++    if let Some(si) = stage_input {
++        let stage_descriptor =
++            make_compute_stage_input_descriptor(si, (ptr::null_mut(), 0)).ok()?;
++        descriptor.set_stage_input_descriptor(Some(&stage_descriptor));
++    }
++    descriptor.set_max_total_threads_per_threadgroup(threads);
++    let pso = device.new_compute_pipeline_state(&descriptor).ok()?;
++    let fits = pso.max_total_threads_per_threadgroup() >= threads;
++    crate::observe::fail(format!(
++        "metal_compute_pso_sized threads={threads} limit={} result={}",
++        pso.max_total_threads_per_threadgroup(),
++        if fits { "fits" } else { "still_short" }
++    ));
++    if !fits {
++        return None;
++    }
++    SIZED.lock().push((blob, stage, threads, pso.clone()));
++    Some(pso)
++}
++
+ pub fn new_compute_pipeline_state(
+     device: &Device,
+     function: &Function,
+@@ -728,9 +780,16 @@ pub fn compute_encode_on_encoder(
+     }
+ 
+     let function = load_only_function(device, mtlb, "compute", err)?;
+-    let pso = new_compute_pipeline_state(device, &function, mtlb, stage_input, err)?;
++    let mut pso = new_compute_pipeline_state(device, &function, mtlb, stage_input, err)?;
+ 
+     let threadgroup_total = (tg_x as u64) * (tg_y as u64) * (tg_z as u64);
++    if threadgroup_total > pso.max_total_threads_per_threadgroup() {
++        if let Some(sized) =
++            sized_compute_pipeline_state(device, &function, mtlb, stage_input, threadgroup_total)
++        {
++            pso = sized;
++        }
++    }
+     let max_tg = pso.max_total_threads_per_threadgroup();
+     if threadgroup_total > max_tg {
+         set_err(
