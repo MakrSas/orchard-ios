@@ -141,7 +141,9 @@ changed and why, and what each problem cost to find.
 * Apps take a long time to open their first window; wait before tapping again.
 * Internet works in the guest (virtio-net with NAT through the phone's own
   connection), but nothing outside the phone can connect in to it.
-* No sound yet.
+* Sound is experimental: turn it on in **Settings… → Machine → Sound**. The
+  guest sees a virtio-sound card as "Speakers"; while its CPUs are busy the
+  sound can break up.
 * If the app closes by itself a while after starting, iOS took the memory:
   lower the guest's memory or the translation buffer.
 

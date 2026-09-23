@@ -80,6 +80,13 @@ void orchard_audio_format(uint32_t *rate, uint32_t *channels)
     *channels = ORCHARD_AUDIO_CHANNELS;
 }
 
+/* Bytes waiting in the ring, for the reader's jitter buffer. */
+size_t orchard_audio_available(void);
+size_t orchard_audio_available(void)
+{
+    return qatomic_load_acquire(&orchard_head) - qatomic_read(&orchard_tail);
+}
+
 /*
  * Up to @bytes of interleaved 16-bit samples into @dst; returns how many were
  * there. Called from the app's real-time audio thread: no locks, no waits.

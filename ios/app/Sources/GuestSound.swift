@@ -15,6 +15,7 @@ final class GuestSound {
     static let shared = GuestSound()
 
     private typealias ReadFn = @convention(c) (UnsafeMutableRawPointer, Int) -> Int
+    private typealias AvailableFn = @convention(c) () -> Int
     private typealias FormatFn = @convention(c) (UnsafeMutablePointer<UInt32>, UnsafeMutablePointer<UInt32>) -> Void
 
     private typealias StatsFn = @convention(c) (UnsafeMutablePointer<UInt64>, UnsafeMutablePointer<UInt64>,
@@ -28,11 +29,13 @@ final class GuestSound {
     func start() {
         guard engine == nil,
               let readSym = QemuBridge.shared.symbol("orchard_audio_read"),
-              let formatSym = QemuBridge.shared.symbol("orchard_audio_format") else {
+              let formatSym = QemuBridge.shared.symbol("orchard_audio_format"),
+              let availableSym = QemuBridge.shared.symbol("orchard_audio_available") else {
             LogCapture.shared.note(L("Звук: в этой сборке библиотеки нет звукового вывода"))
             return
         }
         let read = unsafeBitCast(readSym, to: ReadFn.self)
+        let available = unsafeBitCast(availableSym, to: AvailableFn.self)
         var rate: UInt32 = 0
         var channels: UInt32 = 0
         unsafeBitCast(formatSym, to: FormatFn.self)(&rate, &channels)
@@ -47,12 +50,21 @@ final class GuestSound {
 
         let engine = AVAudioEngine()
         let scratchCount = scratch.count
+        // A jitter buffer: the emulated guest delivers its sound in bursts,
+        // late whenever its CPUs are busy, and playing each gap as it comes
+        // is the crackle. Instead the output waits for ~80 ms of sound
+        // before it plays, and again after running dry: an occasional
+        // short pause rather than constant tearing, for 80 ms of latency.
+        let primeBytes = Int(rate) * 4 * 80 / 1000
+        var primed = false
         let source = AVAudioSourceNode(format: format) { [unowned self] _, _, frameCount, bufferList in
             let buffers = UnsafeMutableAudioBufferListPointer(bufferList)
             let frames = min(Int(frameCount), scratchCount / 2)
-            let got = self.scratch.withUnsafeMutableBytes { raw in
+            if !primed && available() >= primeBytes { primed = true }
+            let got = primed ? self.scratch.withUnsafeMutableBytes { raw in
                 read(raw.baseAddress!, frames * 4) / 4
-            }
+            } : 0
+            if primed && got < frames { primed = false }
             guard buffers.count >= 2,
                   let left = buffers[0].mData?.assumingMemoryBound(to: Float.self),
                   let right = buffers[1].mData?.assumingMemoryBound(to: Float.self) else { return noErr }
