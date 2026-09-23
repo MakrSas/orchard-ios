@@ -327,6 +327,12 @@ static uint64_t pauth_computepac_impdef(uint64_t data, uint64_t modifier,
     return h ^ (h >> 32);
 }
 
+typedef enum PauthAlg {
+    PAUTH_ALG_IMPDEF,
+    PAUTH_ALG_QARMA3,
+    PAUTH_ALG_QARMA5,
+} PauthAlg;
+
 static uint64_t pauth_computepac(CPUARMState *env, uint64_t data,
                                  uint64_t modifier, ARMPACKey key)
 {
@@ -335,51 +341,55 @@ static uint64_t pauth_computepac(CPUARMState *env, uint64_t data,
      * APCTL_KernKeyEn is set. Carried from the Inferno fork
      * (ChefKissInc/Inferno); without it a vmapple guest's kernel pointers
      * authenticate against the wrong key the moment a second core touches them.
+     * Whether to mix, and which algorithm, come from the context (below).
      */
-    if (arm_current_el(env) && (env->cp15.apctl_el1 & APCTL_KernKeyEn)) {
+    if (env->pauth_ctx.kmix) {
         key.lo ^= env->keys.kernel.lo;
         key.hi ^= env->keys.kernel.hi;
     }
 
-    if (cpu_isar_feature(aa64_pauth_qarma5, env_archcpu(env))) {
+    switch (env->pauth_ctx.alg) {
+    case PAUTH_ALG_QARMA5:
         return pauth_computepac_architected(data, modifier, key, false);
-    } else if (cpu_isar_feature(aa64_pauth_qarma3, env_archcpu(env))) {
+    case PAUTH_ALG_QARMA3:
         return pauth_computepac_architected(data, modifier, key, true);
-    } else {
+    default:
         return pauth_computepac_impdef(data, modifier, key);
     }
 }
 
 /*
- * The address-space parameters every PAC instruction needs, cached.
+ * Everything a PAC instruction decides before it hashes, for the state the
+ * CPU is in now.
  *
- * A signed-pointer instruction needs three fields of aa64_va_parameters() —
- * tsz, tbi and mtx — and computing all of them each time was measured as the
- * largest single cost around PAC on an iPhone running a macOS guest under
- * TCG, where the kernel signs or authenticates on every call and return.
+ * Whether the key is enabled, whether the instruction traps to EL2 or EL3,
+ * whether Apple's kernel key is mixed in, and the three address-space fields
+ * the pointer layout needs (tsz, tbi, mtx, for each value of bit 55 and for
+ * instruction and data pointers): each was worked out afresh by each
+ * instruction, through out-of-line calls into the regime, SCTLR, HCR and
+ * TCR code. On an iPhone running a macOS guest, where the kernel signs or
+ * authenticates at nearly every call and return, that bookkeeping cost about
+ * as much as the hash itself.
  *
- * For a fixed CPU, the result depends only on the regime's TCR value, the
- * MMU index, bit 55 of the address and whether the pointer is data; the key
- * holds all four, and the TCR value is read afresh each time, so a changed
- * TCR simply misses. (aa64_va_parameters also reads TCR2/SCR/HCRX, but only
- * for PIE/AIE, which PAC never looks at.) Kept per CPU, in
- * env->pauth_cache.
+ * All of it is a function of the CPU (fixed), the translation regime and EL
+ * (the MMU index in the cached hflags), the regime's TCR, the SCTLR that
+ * gates the keys, APCTL, HCR_EL2 and SCR_EL3 — so the context records those
+ * values and is rebuilt, by the same code as before, whenever one differs.
  */
 QEMU_BUILD_BUG_ON(sizeof(ARMVAParameters) > sizeof(uint32_t));
 
-/*
- * The stage 1 regime these helpers sign for, from the cached hflags rather
- * than arm_stage1_mmu_idx(): that recomputes the regime from SCTLR, HCR and
- * the current EL on every call, and on an arm64e guest a PAC helper runs at
- * nearly every function entry and return. The hflags already hold it — they
- * are rebuilt whenever anything it depends on changes, and a helper only ever
- * runs from a TB translated under them.
- */
-static inline ARMMMUIdx pauth_stage1_mmu_idx(CPUARMState *env)
-{
-    /* stage_1_mmu_idx(), inline: it is out of line in ptw.c. */
-    ARMMMUIdx mmu_idx = core_to_aa64_mmu_idx(arm_env_mmu_index(env));
+enum {
+    PAUTH_KEY_IA = 1 << 0,
+    PAUTH_KEY_IB = 1 << 1,
+    PAUTH_KEY_DA = 1 << 2,
+    PAUTH_KEY_DB = 1 << 3,
+};
 
+static int pauth_trap_target(CPUARMState *env, int el);
+static bool pauth_key_enabled(CPUARMState *env, int el, uint32_t bit);
+
+static ARMMMUIdx pauth_stage1_of(ARMMMUIdx mmu_idx)
+{
     switch (mmu_idx) {
     case ARMMMUIdx_E10_0:
         return ARMMMUIdx_Stage1_E0;
@@ -396,37 +406,79 @@ static inline ARMMMUIdx pauth_stage1_mmu_idx(CPUARMState *env)
     }
 }
 
-static ARMVAParameters pauth_va_parameters(CPUARMState *env, uint64_t ptr,
-                                           ARMMMUIdx mmu_idx, bool data)
+static void pauth_ctx_fill(CPUARMState *env, int core_idx)
 {
-    uint64_t tcr = regime_tcr(env, mmu_idx);
-    bool select = extract64(ptr, 55, 1);
-    typeof(env->pauth_cache.va[0]) *e =
-        &env->pauth_cache.va[((mmu_idx & 3) << 2 | select << 1 | data) & 15];
+    typeof(env->pauth_ctx) *c = &env->pauth_ctx;
+    ARMCPU *cpu = env_archcpu(env);
+    ARMMMUIdx s1 = pauth_stage1_of(core_to_aa64_mmu_idx(core_idx));
+    int el = arm_current_el(env);
+
+    c->mmu_idx = core_idx;
+    c->tcr_el = regime_el(s1);
+    c->tcr = env->cp15.tcr_el[c->tcr_el];
+    if (el > 0) {
+        c->sctlr_el = el;
+    } else {
+        ARMMMUIdx e0 = core_to_aa64_mmu_idx(core_idx);
+        c->sctlr_el = e0 == ARMMMUIdx_E20_0 ? 2 : e0 == ARMMMUIdx_E30_0 ? 3 : 1;
+    }
+    c->sctlr = env->cp15.sctlr_el[c->sctlr_el];
+    c->apctl = env->cp15.apctl_el1;
+    c->hcr = env->cp15.hcr_el2;
+    c->scr = env->cp15.scr_el3;
+
+    c->enabled = (pauth_key_enabled(env, el, SCTLR_EnIA) ? PAUTH_KEY_IA : 0)
+               | (pauth_key_enabled(env, el, SCTLR_EnIB) ? PAUTH_KEY_IB : 0)
+               | (pauth_key_enabled(env, el, SCTLR_EnDA) ? PAUTH_KEY_DA : 0)
+               | (pauth_key_enabled(env, el, SCTLR_EnDB) ? PAUTH_KEY_DB : 0);
+    c->trap = pauth_trap_target(env, el);
+    c->kmix = el && (env->cp15.apctl_el1 & APCTL_KernKeyEn);
+    c->alg = cpu_isar_feature(aa64_pauth_qarma5, cpu) ? PAUTH_ALG_QARMA5
+           : cpu_isar_feature(aa64_pauth_qarma3, cpu) ? PAUTH_ALG_QARMA3
+           : PAUTH_ALG_IMPDEF;
+    c->feature = cpu_isar_feature(pauth_feature, cpu);
+
+    for (int select = 0; select < 2; select++) {
+        for (int data = 0; data < 2; data++) {
+            ARMVAParameters param =
+                aa64_va_parameters(env, (uint64_t)select << 55, s1, data, false);
+            memcpy(&c->va[select][data], &param, sizeof(param));
+        }
+    }
+    c->valid = true;
+}
+
+/* The context for now: one compare per input, rebuilt when any differs. */
+static inline void pauth_ctx_check(CPUARMState *env)
+{
+    typeof(env->pauth_ctx) *c = &env->pauth_ctx;
+    int core_idx = arm_env_mmu_index(env);
+
+    if (unlikely(!c->valid || c->mmu_idx != core_idx
+                 || env->cp15.tcr_el[c->tcr_el] != c->tcr
+                 || env->cp15.sctlr_el[c->sctlr_el] != c->sctlr
+                 || env->cp15.apctl_el1 != c->apctl
+                 || env->cp15.hcr_el2 != c->hcr
+                 || env->cp15.scr_el3 != c->scr)) {
+        pauth_ctx_fill(env, core_idx);
+    }
+}
+
+static inline ARMVAParameters pauth_va_parameters(CPUARMState *env,
+                                                  uint64_t ptr, bool data)
+{
     ARMVAParameters param;
 
-    if (!e->valid || e->tcr != tcr || e->mmu_idx != mmu_idx
-        || e->select != select || e->data != data) {
-        param = aa64_va_parameters(env, ptr, mmu_idx, data, false);
-        memcpy(&e->param, &param, sizeof(param));
-        e->tcr = tcr;
-        e->mmu_idx = mmu_idx;
-        e->select = select;
-        e->data = data;
-        e->valid = true;
-        return param;
-    }
-    memcpy(&param, &e->param, sizeof(param));
+    memcpy(&param, &env->pauth_ctx.va[extract64(ptr, 55, 1)][data],
+           sizeof(param));
     return param;
 }
 
 static uint64_t pauth_addpac(CPUARMState *env, uint64_t ptr, uint64_t modifier,
                              ARMPACKey *key, bool data)
 {
-    ARMCPU *cpu = env_archcpu(env);
-    ARMMMUIdx mmu_idx = pauth_stage1_mmu_idx(env);
-    ARMVAParameters param = pauth_va_parameters(env, ptr, mmu_idx, data);
-    ARMPauthFeature pauth_feature = cpu_isar_feature(pauth_feature, cpu);
+    ARMVAParameters param = pauth_va_parameters(env, ptr, data);
+    ARMPauthFeature pauth_feature = env->pauth_ctx.feature;
     uint64_t pac, ext_ptr, ext, test;
     int bot_bit, top_bit;
 
@@ -517,10 +569,8 @@ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
                            ARMPACKey *key, bool data, int keynumber,
                            uintptr_t ra, bool is_combined)
 {
-    ARMCPU *cpu = env_archcpu(env);
-    ARMMMUIdx mmu_idx = pauth_stage1_mmu_idx(env);
-    ARMVAParameters param = pauth_va_parameters(env, ptr, mmu_idx, data);
-    ARMPauthFeature pauth_feature = cpu_isar_feature(pauth_feature, cpu);
+    ARMVAParameters param = pauth_va_parameters(env, ptr, data);
+    ARMPauthFeature pauth_feature = env->pauth_ctx.feature;
     int bot_bit, top_bit;
     uint64_t pac, orig_ptr, cmp_mask;
 
@@ -561,8 +611,10 @@ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
 
 static uint64_t pauth_strip(CPUARMState *env, uint64_t ptr, bool data)
 {
-    ARMMMUIdx mmu_idx = pauth_stage1_mmu_idx(env);
-    ARMVAParameters param = pauth_va_parameters(env, ptr, mmu_idx, data);
+    ARMVAParameters param;
+
+    pauth_ctx_check(env);
+    param = pauth_va_parameters(env, ptr, data);
 
     return pauth_original_ptr(ptr, param);
 }
@@ -599,31 +651,6 @@ static int pauth_trap_target(CPUARMState *env, int el)
     return 0;
 }
 
-/*
- * The answer depends only on the CPU, the EL, HCR_EL2 and SCR_EL3 — the
- * security state and every HCR bit read here come from those two registers —
- * so it is kept per CPU and recomputed only when one of them has changed.
- * Measured on an iPhone running a macOS guest, the check was 2-3 % of all
- * CPU time: EL2-enabled asks for the security state out of line on every
- * signed call and return, although the answer never changes while macOS runs.
- */
-static void pauth_check_trap(CPUARMState *env, int el, uintptr_t ra)
-{
-    typeof(env->pauth_cache) *c = &env->pauth_cache;
-
-    if (!c->trap_valid || c->trap_el != el || c->trap_hcr != env->cp15.hcr_el2
-        || c->trap_scr != env->cp15.scr_el3) {
-        c->trap_target = pauth_trap_target(env, el);
-        c->trap_el = el;
-        c->trap_hcr = env->cp15.hcr_el2;
-        c->trap_scr = env->cp15.scr_el3;
-        c->trap_valid = true;
-    }
-    if (c->trap_target) {
-        pauth_trap(env, c->trap_target, ra);
-    }
-}
-
 static bool pauth_key_enabled(CPUARMState *env, int el, uint32_t bit)
 {
     /* Apple mode enables the keys without the architected SCTLR bits. */
@@ -643,43 +670,48 @@ static bool pauth_key_enabled(CPUARMState *env, int el, uint32_t bit)
     return (arm_sctlr(env, el) & bit) != 0;
 }
 
+/* Every helper below starts here: the context, then the key and the trap. */
+static inline bool pauth_ctx_enter(CPUARMState *env, int key, uintptr_t ra)
+{
+    pauth_ctx_check(env);
+    if (!(env->pauth_ctx.enabled & key)) {
+        return false;
+    }
+    if (unlikely(env->pauth_ctx.trap)) {
+        pauth_trap(env, env->pauth_ctx.trap, ra);
+    }
+    return true;
+}
+
 uint64_t HELPER(pacia)(CPUARMState *env, uint64_t x, uint64_t y)
 {
-    int el = arm_current_el(env);
-    if (!pauth_key_enabled(env, el, SCTLR_EnIA)) {
+    if (!pauth_ctx_enter(env, PAUTH_KEY_IA, GETPC())) {
         return x;
     }
-    pauth_check_trap(env, el, GETPC());
     return pauth_addpac(env, x, y, &env->keys.apia, false);
 }
 
 uint64_t HELPER(pacib)(CPUARMState *env, uint64_t x, uint64_t y)
 {
-    int el = arm_current_el(env);
-    if (!pauth_key_enabled(env, el, SCTLR_EnIB)) {
+    if (!pauth_ctx_enter(env, PAUTH_KEY_IB, GETPC())) {
         return x;
     }
-    pauth_check_trap(env, el, GETPC());
     return pauth_addpac(env, x, y, &env->keys.apib, false);
 }
 
 uint64_t HELPER(pacda)(CPUARMState *env, uint64_t x, uint64_t y)
 {
-    int el = arm_current_el(env);
-    if (!pauth_key_enabled(env, el, SCTLR_EnDA)) {
+    if (!pauth_ctx_enter(env, PAUTH_KEY_DA, GETPC())) {
         return x;
     }
-    pauth_check_trap(env, el, GETPC());
     return pauth_addpac(env, x, y, &env->keys.apda, true);
 }
 
 uint64_t HELPER(pacdb)(CPUARMState *env, uint64_t x, uint64_t y)
 {
-    int el = arm_current_el(env);
-    if (!pauth_key_enabled(env, el, SCTLR_EnDB)) {
+    if (!pauth_ctx_enter(env, PAUTH_KEY_DB, GETPC())) {
         return x;
     }
-    pauth_check_trap(env, el, GETPC());
     return pauth_addpac(env, x, y, &env->keys.apdb, true);
 }
 
@@ -687,7 +719,10 @@ uint64_t HELPER(pacga)(CPUARMState *env, uint64_t x, uint64_t y)
 {
     uint64_t pac;
 
-    pauth_check_trap(env, arm_current_el(env), GETPC());
+    pauth_ctx_check(env);
+    if (unlikely(env->pauth_ctx.trap)) {
+        pauth_trap(env, env->pauth_ctx.trap, GETPC());
+    }
     pac = pauth_computepac(env, x, y, env->keys.apga);
 
     return pac & 0xffffffff00000000ull;
@@ -696,11 +731,9 @@ uint64_t HELPER(pacga)(CPUARMState *env, uint64_t x, uint64_t y)
 static uint64_t pauth_autia(CPUARMState *env, uint64_t x, uint64_t y,
                             uintptr_t ra, bool is_combined)
 {
-    int el = arm_current_el(env);
-    if (!pauth_key_enabled(env, el, SCTLR_EnIA)) {
+    if (!pauth_ctx_enter(env, PAUTH_KEY_IA, ra)) {
         return x;
     }
-    pauth_check_trap(env, el, ra);
     return pauth_auth(env, x, y, &env->keys.apia, false, 0, ra, is_combined);
 }
 
@@ -717,11 +750,9 @@ uint64_t HELPER(autia_combined)(CPUARMState *env, uint64_t x, uint64_t y)
 static uint64_t pauth_autib(CPUARMState *env, uint64_t x, uint64_t y,
                             uintptr_t ra, bool is_combined)
 {
-    int el = arm_current_el(env);
-    if (!pauth_key_enabled(env, el, SCTLR_EnIB)) {
+    if (!pauth_ctx_enter(env, PAUTH_KEY_IB, ra)) {
         return x;
     }
-    pauth_check_trap(env, el, ra);
     return pauth_auth(env, x, y, &env->keys.apib, false, 1, ra, is_combined);
 }
 
@@ -738,11 +769,9 @@ uint64_t HELPER(autib_combined)(CPUARMState *env, uint64_t x, uint64_t y)
 static uint64_t pauth_autda(CPUARMState *env, uint64_t x, uint64_t y,
                             uintptr_t ra, bool is_combined)
 {
-    int el = arm_current_el(env);
-    if (!pauth_key_enabled(env, el, SCTLR_EnDA)) {
+    if (!pauth_ctx_enter(env, PAUTH_KEY_DA, ra)) {
         return x;
     }
-    pauth_check_trap(env, el, ra);
     return pauth_auth(env, x, y, &env->keys.apda, true, 0, ra, is_combined);
 }
 
@@ -759,11 +788,9 @@ uint64_t HELPER(autda_combined)(CPUARMState *env, uint64_t x, uint64_t y)
 static uint64_t pauth_autdb(CPUARMState *env, uint64_t x, uint64_t y,
                             uintptr_t ra, bool is_combined)
 {
-    int el = arm_current_el(env);
-    if (!pauth_key_enabled(env, el, SCTLR_EnDB)) {
+    if (!pauth_ctx_enter(env, PAUTH_KEY_DB, ra)) {
         return x;
     }
-    pauth_check_trap(env, el, ra);
     return pauth_auth(env, x, y, &env->keys.apdb, true, 1, ra, is_combined);
 }
 
