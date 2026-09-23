@@ -35,7 +35,10 @@ protocol, AIR shader translation (via the `metal2vulkan` crate) and a Vulkan
 renderer. Licensed **LGPL-3.0** (see `reims-vgpu/LICENSE`). This tree includes
 it and links it into QEMU as a static library through the C ABI in
 `reims-vgpu/crates/reims-vgpu/include/reims_vgpu_qemu_abi.h`; the QEMU-side
-transports (`hw/display/reims-vgpu-*.c`) are ours.
+transports (`hw/display/reims-vgpu-*.c`) are ours. Anees Iqbal gave explicit
+permission (2026-09-23) to use reims-vgpu in the Orchard app regardless of the
+repository's licence; see `LICENSE-NOTICE.md`. The iOS port's own changes to
+it — Metal on iOS, display modes, caches — are in the tree.
 
 ## Virtual-iBoot-Fun
 
