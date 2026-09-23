@@ -45,8 +45,8 @@ enum L10n {
         // Shared folder
         ("Общая папка", "Shared folder"),
         ("Адрес в госте", "Address in the guest"),
-        ("Папка Shared в «Файлах» → Orchard видна гостю по сети: в Finder гостя «Переход → Подключение к серверу» (⌘K), адрес http://10.0.2.2:8080, «Подключиться» и вход как гость. Работает в обе стороны: что положили на телефоне — видно в госте, и наоборот. Скорость — как у сети гостя, порядка 15 МБ/с.",
-            "The Shared folder in Files → Orchard is visible to the guest over the network: in the guest's Finder, Go → Connect to Server (⌘K), address http://10.0.2.2:8080, Connect, and sign in as Guest. It works both ways: what you put in it on the phone shows up in the guest, and the other way round. As fast as the guest's network, around 15 MB/s."),
+        ("Папка Shared в «Файлах» → Orchard доступна гостю по сети, по адресу http://10.0.2.2:8080. Из Терминала гостя: «curl -O http://10.0.2.2:8080/файл» забирает файл с телефона, «curl -T файл http://10.0.2.2:8080/» кладёт его на телефон. Скорость — как у сети гостя, порядка 15 МБ/с.",
+            "The Shared folder in Files → Orchard is served to the guest at http://10.0.2.2:8080. From the guest's Terminal, \"curl -O http://10.0.2.2:8080/file\" takes a file from the phone and \"curl -T file http://10.0.2.2:8080/\" puts one on it. As fast as the guest's network, around 15 MB/s."),
         ("Общая папка: не удалось открыть сокет", "Shared folder: could not open a socket"),
         ("Общая папка: порт %d занят", "Shared folder: port %d is in use"),
         ("Общая папка: %@ (папка Shared в «Файлах»)", "Shared folder: %@ (the Shared folder in Files)"),

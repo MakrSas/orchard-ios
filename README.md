@@ -89,12 +89,22 @@ started again in the same run: close the app and open it again.
 
 ## Sharing files with the guest
 
-Put files in **Files → On My iPhone → Orchard → Shared**, and in the guest's
-Finder choose **Go → Connect to Server** (⌘K), enter
-`http://10.0.2.2:8080`, **Connect**, and sign in as **Guest**. The folder is
-mounted in the guest like a network drive and works both ways. It goes
-through the guest's network, around 15 MB/s. It can be turned off in
-**Settings… → Network**.
+Put files in **Files → On My iPhone → Orchard → Shared**; the guest reaches
+that folder at `http://10.0.2.2:8080`. From the guest's Terminal:
+
+```bash
+curl -O http://10.0.2.2:8080/name-of-the-file
+```
+
+takes a file from the phone, and
+
+```bash
+curl -T some-file http://10.0.2.2:8080/
+```
+
+puts one there. It goes through the guest's network, around 15 MB/s, and can
+be turned off in **Settings… → Network**. Finder's Connect to Server does
+not mount it on Ventura yet.
 
 ## Building from source
 
