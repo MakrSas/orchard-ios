@@ -42,7 +42,7 @@ enum DeviceInsets {
             .flatMap(\.windows)
             .first { $0.isKeyWindow }?
             .safeAreaInsets ?? .zero
-        return ScreenInsets(top: insets.top, bottom: insets.bottom)
+        return ScreenInsets(top: insets.top, bottom: insets.bottom, left: insets.left, right: insets.right)
     }
 }
 #else
@@ -1547,6 +1547,10 @@ struct ScreenView: View {
         return (0, 0)
         #else
         guard !fullScreen else { return (0, 0) }
+        // A Mac's desktop reaches the phone's edges: its picture is wider
+        // than tall, so the margins only ever showed as black strips above and
+        // below it, and the island and home indicator sit over its corners.
+        if VMConfig.macGuest { return (0, 0) }
         let insets = DeviceInsets.current
         return (16, max(insets.top, insets.bottom, 16))
         #endif
@@ -1614,15 +1618,25 @@ struct ScreenView: View {
                         .position(x: box?.midX ?? geo.size.width / 2,
                                   y: box?.midY ?? geo.size.height / 2)
                     #endif
-                    if settings.showFPS, let box {
+                    if settings.showFPS {
                         // The console rate belongs here too: when the guest is
                         // pouring kernel log into the UART, the emulated cores
                         // are formatting text instead of drawing, and the frame
                         // count on its own does not say so.
+                        // In the top corner opposite the menu, inside the safe
+                        // area, so the island never covers it; a dark pill keeps
+                        // it readable over whatever the guest draws there.
+                        let insets = DeviceInsets.current
                         Text(String(format: "%.0f FPS · %@", picture.fps, Self.rate(serial.consoleRate)))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .position(x: box.midX, y: min(box.maxY + 16, geo.size.height - 8))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.black.opacity(0.45), in: Capsule())
+                            .fixedSize()
+                            .position(x: max(insets.left, 8) + 60,
+                                      y: max(insets.top, 6) + 10)
+                            .allowsHitTesting(false)
                     }
                 } else {
                     VStack(spacing: 12) {

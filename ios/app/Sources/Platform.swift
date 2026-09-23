@@ -89,4 +89,6 @@ extension View {
 struct ScreenInsets {
     var top: CGFloat = 0
     var bottom: CGFloat = 0
+    var left: CGFloat = 0
+    var right: CGFloat = 0
 }
