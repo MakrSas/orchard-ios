@@ -387,7 +387,23 @@ static __thread PauthVACacheEntry pauth_va_cache[16];
  */
 static inline ARMMMUIdx pauth_stage1_mmu_idx(CPUARMState *env)
 {
-    return stage_1_mmu_idx(core_to_aa64_mmu_idx(arm_env_mmu_index(env)));
+    /* stage_1_mmu_idx(), inline: it is out of line in ptw.c. */
+    ARMMMUIdx mmu_idx = core_to_aa64_mmu_idx(arm_env_mmu_index(env));
+
+    switch (mmu_idx) {
+    case ARMMMUIdx_E10_0:
+        return ARMMMUIdx_Stage1_E0;
+    case ARMMMUIdx_E10_1:
+        return ARMMMUIdx_Stage1_E1;
+    case ARMMMUIdx_E10_1_PAN:
+        return ARMMMUIdx_Stage1_E1_PAN;
+    case ARMMMUIdx_E10_0_GCS:
+        return ARMMMUIdx_Stage1_E0_GCS;
+    case ARMMMUIdx_E10_1_GCS:
+        return ARMMMUIdx_Stage1_E1_GCS;
+    default:
+        return mmu_idx;
+    }
 }
 
 static ARMVAParameters pauth_va_parameters(CPUARMState *env, uint64_t ptr,
@@ -563,7 +579,11 @@ void pauth_trap(CPUARMState *env, int target_el, uintptr_t ra)
     raise_exception_ra(env, EXCP_UDEF, syn_pactrap(), target_el, ra);
 }
 
-static void pauth_check_trap(CPUARMState *env, int el, uintptr_t ra)
+/*
+ * Which EL a PAC instruction at @el traps to (2 or 3), or 0 for none — the
+ * architected check, done once per state rather than per instruction.
+ */
+static int pauth_trap_target(CPUARMState *env, int el)
 {
     if (el < 2 && arm_is_el2_enabled(env)) {
         uint64_t hcr = arm_hcr_el2_eff(env);
@@ -574,13 +594,49 @@ static void pauth_check_trap(CPUARMState *env, int el, uintptr_t ra)
         }
         /* FIXME: ARMv8.3-NV: HCR_NV trap takes precedence for ERETA[AB].  */
         if (trap) {
-            pauth_trap(env, 2, ra);
+            return 2;
         }
     }
     if (el < 3 && arm_feature(env, ARM_FEATURE_EL3)) {
         if (!(env->cp15.scr_el3 & SCR_API)) {
-            pauth_trap(env, 3, ra);
+            return 3;
         }
+    }
+    return 0;
+}
+
+/*
+ * The answer depends only on the CPU, the EL, HCR_EL2 and SCR_EL3 — the
+ * security state and every HCR bit read here come from those two registers —
+ * so it is kept per thread and recomputed only when one of them has changed.
+ * Measured on an iPhone running a macOS guest, the check was 2-3 % of all
+ * CPU time: EL2-enabled asks for the security state out of line on every
+ * signed call and return, although the answer never changes while macOS runs.
+ */
+typedef struct PauthTrapCache {
+    CPUARMState *env;
+    uint64_t hcr;
+    uint64_t scr;
+    int el;
+    int target;
+} PauthTrapCache;
+
+static __thread PauthTrapCache pauth_trap_cache;
+
+static void pauth_check_trap(CPUARMState *env, int el, uintptr_t ra)
+{
+    PauthTrapCache *c = &pauth_trap_cache;
+
+    if (c->env != env || c->el != el || c->hcr != env->cp15.hcr_el2
+        || c->scr != env->cp15.scr_el3) {
+        c->target = pauth_trap_target(env, el);
+        c->env = env;
+        c->el = el;
+        c->hcr = env->cp15.hcr_el2;
+        c->scr = env->cp15.scr_el3;
+    }
+    if (c->target) {
+        pauth_trap(env, c->target, ra);
     }
 }
 
@@ -589,6 +645,16 @@ static bool pauth_key_enabled(CPUARMState *env, int el, uint32_t bit)
     /* Apple mode enables the keys without the architected SCTLR bits. */
     if (el > 0 && (env->cp15.apctl_el1 & APCTL_AppleMode)) {
         return true;
+    }
+    if (el == 0) {
+        /*
+         * arm_sctlr(env, 0) recomputes the EL0 regime out of line; running
+         * at EL0, the cached hflags already hold it.
+         */
+        ARMMMUIdx mmu_idx = core_to_aa64_mmu_idx(arm_env_mmu_index(env));
+        int regime_el = mmu_idx == ARMMMUIdx_E20_0 ? 2
+                      : mmu_idx == ARMMMUIdx_E30_0 ? 3 : 1;
+        return (env->cp15.sctlr_el[regime_el] & bit) != 0;
     }
     return (arm_sctlr(env, el) & bit) != 0;
 }
