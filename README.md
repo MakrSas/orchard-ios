@@ -124,7 +124,9 @@ changed and why, and what each problem cost to find.
 
 * It is slow. Every guest instruction is translated on the phone's CPU.
 * Apps take a long time to open their first window; wait before tapping again.
-* No sound yet, and no way to reach the guest from outside the phone.
+* Internet works in the guest (virtio-net with NAT through the phone's own
+  connection), but nothing outside the phone can connect in to it.
+* No sound yet.
 * If the app closes by itself a while after starting, iOS took the memory:
   lower the guest's memory or the translation buffer.
 
