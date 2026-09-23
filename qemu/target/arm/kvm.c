@@ -25,6 +25,7 @@
 #include "system/ramblock.h"
 #include "system/kvm.h"
 #include "system/kvm_int.h"
+#include "system/hw_accel.h"
 #include "kvm_arm.h"
 #include "cpu.h"
 #include "cpu-sysregs.h"
@@ -1441,6 +1442,21 @@ static int kvm_arm_handle_dabt_nisv(ARMCPU *cpu, uint64_t esr_iss,
                                     uint64_t fault_ipa)
 {
     CPUARMState *env = &cpu->env;
+    static uint64_t last_pc = -1;
+    uint32_t insn = 0;
+
+    /*
+     * Name the instruction KVM could not decode: without it the guest only
+     * sees an external abort and the cause is lost.
+     */
+    cpu_synchronize_state(CPU(cpu));
+    if (env->pc != last_pc) {
+        last_pc = env->pc;
+        cpu_memory_rw_debug(CPU(cpu), env->pc, &insn, sizeof(insn), false);
+        error_report("kvm: no-syndrome data abort: pc=0x%" PRIx64
+                     " insn=0x%08x ipa=0x%" PRIx64 " iss=0x%" PRIx64,
+                     env->pc, insn, fault_ipa, esr_iss);
+    }
     /*
      * Request KVM to inject the external data abort into the guest
      */

@@ -912,7 +912,7 @@ static void reims_vgpu_mmio_poll_tick(void *opaque)
  * every vsync with no new guest present (archive present-boundary = newFrame;
  * stamp completes before HostAction apply so guest waiters see stamp first).
  */
-static void reims_vgpu_mmio_fb_update(void *opaque)
+static bool reims_vgpu_mmio_fb_update(void *opaque)
 {
     ReimsVGPUMMIOState *s = opaque;
     uint32_t mapping_id = 0;
@@ -922,7 +922,7 @@ static void reims_vgpu_mmio_fb_update(void *opaque)
     uint32_t kind;
 
     if (!s->con) {
-        return;
+        return true;
     }
 
     /*
@@ -955,7 +955,7 @@ static void reims_vgpu_mmio_fb_update(void *opaque)
             qemu_console_update_full(s->con);
             s->new_frame_ready = false;
         }
-        return;
+        return true;
     }
     if (kind == REIMS_VGPU_CONSOLE_FEED_FIRMWARE) {
         /*
@@ -976,7 +976,7 @@ static void reims_vgpu_mmio_fb_update(void *opaque)
                 qemu_console_update_full(s->con);
             }
         }
-        return;
+        return true;
     }
 
     /* Nothing painted this tick — re-push the last frame if one is pending.
@@ -986,6 +986,7 @@ static void reims_vgpu_mmio_fb_update(void *opaque)
         qemu_console_update_full(s->con);
         s->new_frame_ready = false;
     }
+    return true;
 }
 
 static const GraphicHwOps reims_vgpu_mmio_fb_ops = {
