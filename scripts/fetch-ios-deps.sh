@@ -15,7 +15,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPS="${ORCHARD_IOS_DEPS:-$ROOT/deps/ios}"
 TAG="${ORCHARD_IOS_DEPS_TAG:-ios-deps-1}"
 ASSET="orchard-ios-deps-arm64.tar.xz"
-REPO="${ORCHARD_REPO:-MakrSas/orchard}"
+REPO="${ORCHARD_REPO:-MakrSas/orchard-ios}"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
