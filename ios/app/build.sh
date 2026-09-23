@@ -55,8 +55,7 @@ fi
 HYPERVISOR="${ORCHARD_HYPERVISOR:-}"
 if [ -n "$HVF" ] && [ -z "$HYPERVISOR" ]; then
     for candidate in \
-        "$ROOT/../build/hypervisor/Frameworks/Hypervisor.framework" \
-        "$HOME/inferno-ios/build/hypervisor/Frameworks/Hypervisor.framework"
+        "$ROOT/../build/hypervisor/Frameworks/Hypervisor.framework"
     do
         [ -d "$candidate" ] && HYPERVISOR="$candidate" && break
     done
@@ -101,47 +100,48 @@ cp "$DYLIB" "$APP/Frameworks/"
 if [ -n "$HVF" ]; then cp -R "$HYPERVISOR" "$APP/Frameworks/"; fi
 chmod +x "$APP/Orchard"
 
-# The two programs that run inside the guest, in the restore ramdisk: our
-# daemon and ChefKiss's filesystem patcher, which it starts once the restore
-# has finished writing. RestoreRamdisk.swift puts them into a copy of the
-# ramdisk; nothing here runs on the phone itself.
+# The two programs that run inside an iPhone guest's restore ramdisk: our
+# daemon and ChefKiss's filesystem patcher (AGPL-3.0, built from their tree
+# unmodified), which RestoreRamdisk.swift puts into a copy of the ramdisk. A
+# macOS guest has no use for them, so they are built only when
+# ORCHARD_FS_PATCHER_SRC points at the patcher's tree.
 #
 # Both are ad-hoc signed, and that is not cosmetic: AMFI in the guest kills an
 # unsigned process the moment it execs, silently, and a parent sees the same
 # exit status a clean run would give.
-#
-# The patcher is ChefKiss's, AGPL-3.0, built from their tree unmodified --
-# beside the repository as the README has it, or wherever
-# ORCHARD_FS_PATCHER_SRC points.
 PATCHER_SRC="${ORCHARD_FS_PATCHER_SRC:-}"
-if [ -z "$PATCHER_SRC" ]; then
-    for candidate in \
-        "$ROOT/../tools/InfernoFSPatcher" \
-        "$HOME/inferno-ios/tools/InfernoFSPatcher"
-    do
-        [ -d "$candidate/src" ] && PATCHER_SRC="$candidate" && break
+if [ -n "$PATCHER_SRC" ]; then
+    [ -f "$PATCHER_SRC/src/main.cpp" ] || {
+        echo "No InfernoFSPatcher sources in $PATCHER_SRC" >&2
+        exit 1
+    }
+    mkdir -p "$APP/guest"
+    # arm64e and iOS 14: the guest is an emulated iPhone 11 running the
+    # firmware being restored, not the phone this app is installed on.
+    xcrun --sdk iphoneos clang -arch arm64e -isysroot "$SDK" -mios-version-min=14.0 -O2 \
+        -o "$APP/guest/orchard_patcher" "$ROOT/guest/patcher-daemon.c"
+    xcrun --sdk iphoneos clang++ -arch arm64e -isysroot "$SDK" -mios-version-min=14.0 -O2 \
+        -std=c++17 -o "$APP/guest/orchard_fs_patcher" "$PATCHER_SRC/src/main.cpp"
+    codesign -f -s - "$APP/guest/orchard_patcher"
+    codesign -f -s - "$APP/guest/orchard_fs_patcher"
+fi
+
+# QEMU's data directory. The VNC server refuses to start without keymaps. The
+# QEMU build generates them beside the library when the Mac has xkbcommon;
+# otherwise a Homebrew QEMU has them. Only the VNC display path needs them —
+# the built-in one does not — so a build without them only warns.
+KEYMAPS="${ORCHARD_KEYMAPS:-}"
+if [ -z "$KEYMAPS" ]; then
+    for candidate in "$(dirname "$DYLIB")/pc-bios/keymaps" /opt/homebrew/share/qemu/keymaps; do
+        [ -f "$candidate/en-us" ] && KEYMAPS="$candidate" && break
     done
 fi
-[ -n "$PATCHER_SRC" ] && [ -f "$PATCHER_SRC/src/main.cpp" ] || {
-    echo "Нет исходников InfernoFSPatcher. Склонируйте их или укажите ORCHARD_FS_PATCHER_SRC=" >&2
-    exit 1
-}
-mkdir -p "$APP/guest"
-# arm64e and iOS 14: the guest is an emulated iPhone 11 running the firmware
-# being restored, not the phone this app is installed on.
-xcrun --sdk iphoneos clang -arch arm64e -isysroot "$SDK" -mios-version-min=14.0 -O2 \
-    -o "$APP/guest/orchard_patcher" "$ROOT/guest/patcher-daemon.c"
-xcrun --sdk iphoneos clang++ -arch arm64e -isysroot "$SDK" -mios-version-min=14.0 -O2 \
-    -std=c++17 -o "$APP/guest/orchard_fs_patcher" "$PATCHER_SRC/src/main.cpp"
-codesign -f -s - "$APP/guest/orchard_patcher"
-codesign -f -s - "$APP/guest/orchard_fs_patcher"
-
-# QEMU's data directory. The iOS build drops the keymaps from its tree, but the VNC
-# server still refuses to start without them, so take them from a stock QEMU.
-KEYMAPS="${ORCHARD_KEYMAPS:-/opt/homebrew/share/qemu/keymaps}"
-[ -d "$KEYMAPS" ] || { echo "Нет keymap-файлов: $KEYMAPS" >&2; exit 1; }
 mkdir -p "$APP/qemu-data"
-cp -R "$KEYMAPS" "$APP/qemu-data/keymaps"
+if [ -n "$KEYMAPS" ] && [ -f "$KEYMAPS/en-us" ]; then
+    cp -R "$KEYMAPS" "$APP/qemu-data/keymaps"
+else
+    echo "warning: no QEMU keymaps; the VNC display path will not start" >&2
+fi
 
 
 # App icon. Two sources, same actool-compile-then-merge-partial-plist dance:

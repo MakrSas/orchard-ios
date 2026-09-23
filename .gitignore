@@ -31,3 +31,6 @@ __pycache__/
 
 # Local-only field wrapper: kept in the working tree, never committed.
 arm-wrapper/
+
+# Prebuilt iOS C dependencies (scripts/fetch-ios-deps.sh)
+deps/

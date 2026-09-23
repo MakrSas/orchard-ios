@@ -1,5 +1,8 @@
 # macOS on QEMU, on a Linux host
 
+> **On an iPhone:** the same machine runs inside an iOS app — see
+> [`ios/README.md`](ios/README.md).
+
 Video link: https://jumpshare.com/share/xWiBdnqUZPoGVcCptEGG
 
 Boots an **arm64 macOS guest** (Ventura) on **QEMU/TCG on Linux**, through the

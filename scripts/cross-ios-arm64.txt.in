@@ -1,0 +1,44 @@
+# Meson cross-file: arm64 iOS (device), for cross-compiling qemu/ as a
+# shared library (see meson_options.txt's `shared_lib`) that ios/app dlopens.
+#
+# Modelled on the cross-file Inferno-iOS uses for its own QEMU fork. A
+# template: scripts/build-ios.sh fills in @SDK@ and @TOOLCHAIN@ from the
+# installed Xcode and @DEPS@ with the prebuilt C dependencies (glib, gmp,
+# pixman, lzfse, nettle, libpng, libslirp, libtasn1, libucontext; see
+# scripts/fetch-ios-deps.sh), and writes the result into the build tree.
+
+[binaries]
+c          = 'clang'
+cpp        = 'clang++'
+objc       = 'clang'
+ar         = '@TOOLCHAIN@/usr/bin/ar'
+strip      = '@TOOLCHAIN@/usr/bin/strip'
+ranlib     = '@TOOLCHAIN@/usr/bin/ranlib'
+pkg-config = 'pkg-config'
+
+[built-in options]
+c_args      = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0', '-D_XOPEN_SOURCE', '-I@DEPS@/include']
+c_link_args = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0', '-L@DEPS@/lib', '-framework', 'CoreFoundation', '-lucontext']
+cpp_args    = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0']
+cpp_link_args = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0', '-L@DEPS@/lib', '-framework', 'CoreFoundation', '-lucontext']
+objc_args   = ['-arch', 'arm64', '-isysroot', '@SDK@', '-mios-version-min=16.0']
+prefix      = '@DEPS@'
+
+[host_machine]
+system     = 'darwin'
+subsystem  = 'ios'
+kernel     = 'xnu'
+cpu_family = 'aarch64'
+cpu        = 'aarch64'
+endian     = 'little'
+
+[properties]
+needs_exe_wrapper = true
+pkg_config_libdir = ['@DEPS@/lib/pkgconfig']
+# Which configs/devices/<target>/<name>.mak meson.build's own minikconf step
+# reads (meson.get_external_property(target, 'default')) — the equivalent of
+# configure's --with-devices-aarch64=ios, which only exists as a flag to
+# configure itself, not as something a hand-written cross-file inherits for
+# free. Selects ios.mak (REIMS_VGPU off; see that file for why) over
+# default.mak.
+aarch64-softmmu = 'ios'

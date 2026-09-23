@@ -174,9 +174,10 @@ Inferno на телефоне 256 МБ дают в 2–3 раза больше �
 ## Как собрать и запустить
 
 1. **Библиотека:** `scripts/build-ios.sh` → `qemu/build-ios/libqemu-aarch64-softmmu.dylib`.
-   Нужны `~/inferno-ios/prefix` (glib, pixman, libslirp, libucontext… от
-   Inferno-iOS), Xcode с iPhoneOS SDK (путь к SDK зашит в
-   `scripts/cross-ios-arm64.txt`, сейчас `iPhoneOS27.1.sdk`),
+   Нужны зависимости в `deps/ios` (glib, pixman, libslirp, libucontext…:
+   `scripts/fetch-ios-deps.sh` качает их архивом из релиза `ios-deps-1`, или
+   `ORCHARD_IOS_DEPS=` на свой префикс), Xcode с iPhoneOS SDK (cross-файл
+   собирается из `scripts/cross-ios-arm64.txt.in` под установленный Xcode),
    `rustup target add aarch64-apple-ios`. Первый раз ~20–30 мин на M1 8 ГБ,
    дальше инкрементально.
 2. **Приложение:** `ios/app/build.sh` → `ios/Orchard.ipa` (библиотеку ищет
@@ -269,7 +270,7 @@ Inferno на телефоне 256 МБ дают в 2–3 раза больше �
    recoveryOS) и повторную конвертацию.
 4. Айфонные остатки в приложении (выбор «экрана iPhone 11», `Restore*.swift` и т.д.).
 5. Производительность — пока не мерили.
-6. Лицензии: `ui/orchard-embed.c` пришёл из Inferno-iOS (там `ui/inferno-embed.c`) под AGPL-3.0, остальной
+6. Лицензии: `ui/orchard-embed.c` пришёл из Inferno-iOS (там `ui/inferno-embed.c`, AGPL-3.0), здесь он, как и приложение, GPL-2.0-or-later; остальной
    QEMU — GPL-2.0-or-later. Изменения в `qemu/` по правилам QEMU (`qemu/AGENTS.md`)
    годятся для этого форка, но не для отправки в апстрим qemu-devel.
 
@@ -327,11 +328,11 @@ Inferno на телефоне 256 МБ дают в 2–3 раза больше �
 - **План:** прогнать `configure` нативно (macOS, без всякого iOS) в
   отдельной `build-bootstrap/` только чтобы получить
   `config-host.mak`/`aarch64-softmmu-config-target.mak`, затем поднять
-  отдельный `build-ios/` через `meson setup --cross-file=scripts/cross-ios-arm64.txt -Dshared_lib=true` с теми же опциями, что использовал
+  отдельный `build-ios/` через `meson setup --cross-file=<build-ios>/cross-ios-arm64.txt (из scripts/cross-ios-arm64.txt.in) -Dshared_lib=true` с теми же опциями, что использовал
   Inferno (`-Dkvm=disabled -Dhvf=disabled -Dgtk=disabled -Dsdl=disabled
   -Dvnc=enabled -Dcoroutine_backend=ucontext` и т.д.), подсунув
   предсгенерированные `.mak`-файлы. Сейчас крутится bootstrap-`configure`.
-- Cross-file лежит в [scripts/cross-ios-arm64.txt](../scripts/cross-ios-arm64.txt)
+- Cross-file лежит в [scripts/cross-ios-arm64.txt.in](../scripts/cross-ios-arm64.txt.in)
   — переиспользует уже собранный Inferno-тулчейн/префикс
   (`~/inferno-ios/prefix`: glib, gmp, pixman, lzfse, nettle, libpng,
   libslirp, libtasn1, libucontext — общие C-зависимости QEMU, не
@@ -416,7 +417,7 @@ cross-file руками (как Inferno), так что это свойство 
 попадало в наш файл — `meson.build` (`config_input =
 meson.get_external_property(target, 'default')`, строка ~3409) молча
 брало `default.mak` вместо `ios.mak`. Добавили `aarch64-softmmu = 'ios'`
-в `[properties]` [scripts/cross-ios-arm64.txt](../scripts/cross-ios-arm64.txt)
+в `[properties]` [scripts/cross-ios-arm64.txt.in](../scripts/cross-ios-arm64.txt.in)
 — заработало, `CONFIG_REIMS_VGPU` подтверждённо отсутствует в
 сгенерированном `aarch64-softmmu-config-devices.mak`.
 

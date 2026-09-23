@@ -1,6 +1,6 @@
 # Attribution
 
-This tree combines three bodies of work.
+This tree combines several bodies of work.
 
 ## QEMU
 
@@ -44,6 +44,21 @@ run outside Apple's own hypervisor — is from NyanSatan's
 [Virtual-iBoot-Fun](https://github.com/NyanSatan/Virtual-iBoot-Fun). Ours is
 only `scripts/patch-avpbooter.py`, which applies it to a firmware image the user
 supplies after checking that the bytes at the site are what the patch expects.
+
+## The iOS port
+
+`ios/app` and the iOS-specific parts of `qemu/` (the in-process display and
+input in `ui/orchard-embed.c`, the JIT and coroutine changes that let QEMU run
+as a library inside an iOS app) come from Makr's
+[Inferno-iOS](https://github.com/MakrSas/Inferno-iOS), the iPhone port of
+ChefKissInc's Inferno, and were carried over and extended here with Claude.
+Here they are GPL-2.0-or-later, relicensed by their author from Inferno-iOS's
+GPL-3.0 (the app) and AGPL-3.0 (`ui/inferno-embed.c`).
+
+The iOS build links a set of static C libraries (GLib, pixman, libslirp, GMP,
+Nettle and others) built from unmodified upstream sources; their versions and
+licences are listed in `scripts/ios-deps-SOURCES.md` and shipped inside the
+archive `scripts/fetch-ios-deps.sh` downloads.
 
 ## Not distributed here
 

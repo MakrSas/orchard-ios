@@ -9,13 +9,16 @@
 #                         Python venv with a matching meson and a
 #                         config-host.mak (TARGET_DIRS and friends): meson.build
 #                         reads that file but only configure writes it.
-#   qemu/build-ios        meson setup against scripts/cross-ios-arm64.txt, which
-#                         also selects configs/devices/aarch64-softmmu/ios.mak.
+#   qemu/build-ios        meson setup against a cross-file made from
+#                         scripts/cross-ios-arm64.txt.in, which also selects
+#                         configs/devices/aarch64-softmmu/ios.mak.
 #
-# The C dependencies (glib, pixman, libslirp, ...) come prebuilt from
-# ~/inferno-ios/prefix, the same prefix Inferno-iOS builds against; see the
-# cross-file. The Rust display device is built by meson itself, with cargo, for
+# The C dependencies (glib, pixman, libslirp, ...) come prebuilt: deps/ios, as
+# scripts/fetch-ios-deps.sh unpacks them, or wherever ORCHARD_IOS_DEPS points.
+# The Rust display device is built by meson itself, with cargo, for
 # aarch64-apple-ios and backend-metal.
+#
+# Needs Xcode with the iPhoneOS SDK, rustup, ninja and pkg-config.
 #
 # Re-running is cheap: each tree is only configured when it does not exist yet,
 # and ninja rebuilds what changed.
@@ -24,15 +27,25 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QEMU="$ROOT/qemu"
 BOOT="$QEMU/build-bootstrap"
-IOS="$QEMU/build-ios"
-CROSS="$ROOT/scripts/cross-ios-arm64.txt"
+IOS="${BUILD_DIR:-$QEMU/build-ios}"
+DEPS="${ORCHARD_IOS_DEPS:-$ROOT/deps/ios}"
 JOBS="${JOBS:-$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.ncpu)}"
 
+[ -f "$DEPS/lib/libglib-2.0.a" ] || {
+    echo "No iOS dependencies in $DEPS. Run scripts/fetch-ios-deps.sh or set ORCHARD_IOS_DEPS=" >&2
+    exit 1
+}
+DEPS="$(cd "$DEPS" && pwd)"
+
+# The cross-file, filled in for this Mac. Rewritten on every run, so a new
+# Xcode is picked up by the next ninja, which re-runs meson when it changes.
 sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
-if ! grep -q "$sdk" "$CROSS"; then
-    echo "warning: $CROSS names an SDK other than $sdk" >&2
-    echo "         update its -isysroot paths if the build cannot find headers" >&2
-fi
+toolchain="$(dirname "$(dirname "$(dirname "$(xcrun --find ar)")")")"
+mkdir -p "$IOS"
+CROSS="$IOS/cross-ios-arm64.txt"
+sed -e "s|@SDK@|$sdk|g" -e "s|@TOOLCHAIN@|$toolchain|g" -e "s|@DEPS@|$DEPS|g" \
+    "$ROOT/scripts/cross-ios-arm64.txt.in" > "$CROSS.new"
+if cmp -s "$CROSS.new" "$CROSS"; then rm "$CROSS.new"; else mv "$CROSS.new" "$CROSS"; fi
 rustup target list --installed | grep -qx aarch64-apple-ios || rustup target add aarch64-apple-ios
 
 if [ ! -f "$BOOT/config-host.mak" ]; then
@@ -44,11 +57,10 @@ fi
 
 if [ ! -f "$IOS/build.ninja" ]; then
     echo "==> meson setup for iOS"
-    mkdir -p "$IOS"
     cp "$BOOT/config-host.mak" "$IOS/config-host.mak"
     (cd "$IOS" && "$BOOT/pyvenv/bin/meson" setup . .. \
         --cross-file="$CROSS" \
-        -Dbuildtype=release -Dprefix="$HOME/inferno-ios/prefix" \
+        -Dbuildtype=release -Dprefix="$DEPS" \
         -Dshared_lib=true -Db_staticpic=true -Dwerror=false \
         -Dkvm=disabled -Dhvf=disabled -Dwhpx=disabled \
         -Dcocoa=disabled -Dgtk=disabled -Dsdl=disabled -Dcurses=disabled \
