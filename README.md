@@ -1,118 +1,167 @@
-# macOS on QEMU, on a Linux host
+# Orchard for iPhone
 
-> **On an iPhone:** the same machine runs inside an iOS app — see
-> [`ios/README.md`](ios/README.md).
+**Apple Silicon macOS, running inside an iPhone app.**
 
-Video link: https://jumpshare.com/share/xWiBdnqUZPoGVcCptEGG
+An arm64 macOS Ventura guest boots through Apple's own chain — `AVPBooter →
+iBoot → XNU` — on QEMU's `apple-vm` machine, and runs to the desktop. QEMU is
+a library inside the app, the guest's cores are translated by TCG with a JIT,
+and the GPU is [reims-vgpu](https://github.com/steelbrain/reims-vgpu), drawing
+through the phone's own Metal. It is slow — around 15 frames a second at best
+on an iPhone 15 — but it is the real macOS.
 
-Boots an **arm64 macOS guest** (Ventura) on **QEMU/TCG on Linux**, through the
-genuine Apple boot chain — `AVPBooter → iBootStage1 (LLB) → iBootStage2 (iBoot)
-→ stock XNU` — with a GPU that renders the desktop on the host's Vulkan.
+This is the iOS port of [Orchard](https://github.com/yaelliethy/orchard), which
+does the same on a Linux host; that guide is in [`LINUX.md`](LINUX.md).
 
-No Apple hardware is involved at run time, and nothing Apple ships is
-redistributed here: you supply the firmware and the disk image, and the scripts
-below fetch or patch them in place.
-
-```
-                                  guest
-   ┌──────────────────────────────────────────────────────────────┐
-   │ macOS 13 (arm64e, RELEASE_ARM64_VMAPPLE) — unmodified        │
-   └──────────────────────────────────────────────────────────────┘
-        │ PVG command stream            │ virtio-blk (aux + root)
-   ┌────┴──────────────┐          ┌─────┴───────────────────────┐
-   │ reims-vgpu        │          │ QEMU `apple-vm` machine     │
-   │ (Rust, Vulkan)    │          │ vmapple devices + AVPBooter │
-   └────┬──────────────┘          └─────────────────────────────┘
-        │ Vulkan
-   ┌────┴──────────────┐
-   │ host GPU (RADV)   │
-   └───────────────────┘
-```
+Nothing Apple ships is in the app or this repository. You bring the macOS VM.
 
 ## What you need
 
 | | |
 |---|---|
-| Host | Linux, x86-64. A Vulkan GPU (developed on AMD RENOIR / Mesa RADV). |
-| RAM | 16 GB+ — the guest gets 10 GB by default, and the whole RAMBlock is imported into one Vulkan heap, so the host needs that much importable GPU memory too. |
-| Disk | ~40 GB for the macOS image (50 GB apparent, sparse). |
-| Tools | `cargo` (stable Rust), a C toolchain, `ninja`, `meson`, `python3` with `requests` and `lz4`. |
-| Extra tool | [`apfs-fuse`](https://github.com/sgan81/apfs-fuse), to read the macOS image — that is where the firmware comes from. |
+| Phone | Tested on iPhone 15 (A16, 6 GB) with iOS 27. iOS 16 or later; the more memory, the better — a phone with 6 GB or more. |
+| Sideloading | A signing tool that adds the **increased memory limit** capability to the app's ID when it signs it. Stock iLoader does not; the build used in testing was patched to. Without it iOS kills the app at about 3 GB; with it the ceiling is about 4 GB. |
+| JIT | A way to attach a debugger to the app on launch, such as StikDebug. Without JIT the app cannot start the machine. |
+| Mac | Only to make the VM: a Mac with [UTM](https://mac.getutm.app) and a macOS 13 (Ventura) VM made with the **Virtualize** backend. |
+| Space | About 20 GB on the phone or on a USB drive for the VM folder. |
 
-## Getting it running
+## 1. Make the VM folder (on a Mac)
 
-```sh
-# 1. build QEMU (this also builds the Rust GPU device)
-scripts/build.sh
+Install macOS Ventura in UTM with **Virtualize**, finish its setup assistant
+there (it is far too slow to do on the phone), then shut it down — not
+suspend — and convert it. The converter needs `qemu-img`, from Homebrew's
+QEMU:
 
-# 2. fetch the macOS image: disk, NVRAM, and the VM config that carries its ECID
-scripts/fetch-tart-image.py --out-dir images        # ~30 GB, resumable
-
-# 3. take Apple's VM firmware out of the image, and patch it to run here
-scripts/extract-avpbooter.py images/disk.raw -o images/AVPBooter.vmapple2.bin
-scripts/patch-avpbooter.py images/AVPBooter.vmapple2.bin images/AVPBooter.patched.bin
-
-# 4. optional: ask the kernel for a serial log
-scripts/prepare-aux.py images/aux.img --set 'boot-args=-v serial=3'
-
-# 5. boot
-scripts/boot-robust.sh      # or scripts/run-vm.sh to stay in the foreground
+```bash
+brew install qemu
 ```
 
-The desktop appears in the device's own Vulkan window. First boot to the login
-screen takes a few minutes under TCG; see **Known problems** before concluding
-anything has gone wrong.
+```bash
+python3 scripts/utm-to-orchard.py ~/Library/Containers/com.utmapp.UTM/Data/Documents/Ventura.utm --out-dir ~/Desktop/OrchardVM
+```
+
+The folder holds `disk.qcow2`, `aux.img`, `config.json`,
+`AVPBooter.patched.bin` and `overlay.qcow2`. The disk is only ever read; all
+the guest's writes go into `overlay.qcow2`. To reset the guest, replace the
+overlay with a fresh one:
+
+```bash
+qemu-img create -f qcow2 -F qcow2 -b disk.qcow2 -u overlay.qcow2 68719476736
+```
+
+## 2. Install the app
+
+Take `Orchard.ipa` from the release (or build it, below) and install it with
+your signing tool, with the increased memory limit on. Then enable JIT for it
+with StikDebug and launch it.
+
+## 3. Give it the VM
+
+Either copy the `OrchardVM` folder into **Files → On My iPhone → Orchard**,
+or open the round button in the corner → **Settings… → Where the VM lives →
+Choose a folder…** and pick it on a USB drive. From a drive the VM boots in
+place; a USB SSD is noticeably faster than a flash stick.
+
+## 4. Settings that matter
+
+In the round button's **Settings…**. All of these apply the next time the
+machine starts.
+
+* **Machine → Memory**: 2.5 GB with the increased limit, 2 GB without it.
+  Under 2 GB macOS reboots in a loop; at 3 GB the app hits the iOS ceiling as
+  soon as a few windows open. The ceiling as measured is shown under the
+  picker.
+* **Machine → Cores**: 2–4. An iPhone has two fast cores; more guest cores
+  than that are not always faster.
+* **Translator → Translation buffer**: 256 MB. Less makes the guest
+  re-translate its code constantly; more can hang the machine at the first
+  instruction.
+* **Screen → Resolution**: the "Like the screen" modes fill the phone edge
+  to edge; smaller is faster. **Refresh rate**: 30 Hz is a quarter of the
+  work of 120.
+* **Screen → Trackpad mode**: the pointer moves by how far the finger travels;
+  tap to click, two fingers to right-click and scroll, hold then move to drag.
+
+## 5. Start it
+
+Tap the round button in the corner and choose **Start**. The first boot to
+the login window takes several minutes. A machine that has stopped cannot be
+started again in the same run: close the app and open it again.
+
+## Building from source
+
+On a Mac with Xcode (and its iPhoneOS SDK), [rustup](https://rustup.rs) and
+Homebrew. QEMU's configure runs once natively before the iOS build, which is
+what the Homebrew libraries are for:
+
+```bash
+brew install ninja pkgconf glib pixman libslirp qemu
+```
+
+Then:
+
+```bash
+scripts/fetch-ios-deps.sh
+```
+
+```bash
+scripts/build-ios.sh
+```
+
+```bash
+ios/app/build.sh
+```
+
+The first downloads prebuilt static C libraries (GLib, pixman, libslirp and
+others; see `scripts/ios-deps-SOURCES.md`) into `deps/ios`. The second builds
+QEMU and reims-vgpu into `qemu/build-ios/libqemu-aarch64-softmmu.dylib`. The
+third builds the app around it and writes `ios/Orchard.ipa`, unsigned — your
+signing tool signs it on install.
+
+`ios/PORTING.md` is the long account of the port (in Russian): what was
+changed and why, and what each problem cost to find.
+
+## Known problems
+
+* It is slow. Every guest instruction is translated on the phone's CPU.
+* Apps take a long time to open their first window; wait before tapping again.
+* No sound yet, and no way to reach the guest from outside the phone.
+* If the app closes by itself a while after starting, iOS took the memory:
+  lower the guest's memory or the translation buffer.
 
 ## What is in here
 
 | Path | What it is |
 |---|---|
-| `qemu/` | Upstream QEMU with our changes applied (see `TECHNICAL.md` for the list). |
-| `reims-vgpu/` | The paravirtual GPU, vendored in-tree — [steelbrain/reims-vgpu](https://github.com/steelbrain/reims-vgpu), a Rust crate that turns Apple's PVG command stream into Vulkan, with our changes baked in. Not ours. |
-| `scripts/` | Fetch, patch, build and run. |
-| `TECHNICAL.md` | How the whole thing works, and what each change is for. |
-| `CONTRIBUTING.md` | Where a change belongs, how to test it, and the evidence rule. |
+| `ios/app/` | The iPhone app: SwiftUI, no Xcode project; `ios/app/build.sh` builds it. |
+| `qemu/` | QEMU with Orchard's `apple-vm` machine and the iOS changes: runs as a library, JIT on iOS, in-process display and input. |
+| `reims-vgpu/` | The paravirtual GPU, vendored — [steelbrain/reims-vgpu](https://github.com/steelbrain/reims-vgpu), with a Metal backend that builds for iOS. |
+| `scripts/` | Build, convert a UTM VM, fetch the iOS dependencies. |
+| `ios/PORTING.md` | How the port was done, and what it cost. |
+| `TECHNICAL.md` | How Orchard itself works. |
 
-## Supporting the project
+## Credits
 
-[**buymeacoffee.com/yaelliethy**](https://buymeacoffee.com/yaelliethy)
+- **Youssef Elliethy** ([yaelliethy](https://github.com/yaelliethy)) — Orchard:
+  reverse-engineered enough of Apple's bootloader, virtualization and OS stack
+  to boot macOS on QEMU, and ported reims-vgpu to it.
+- **Anees Iqbal** ([steelbrain](https://github.com/steelbrain)) — reims-vgpu,
+  the GPU everything on screen goes through.
+- **Visual Ehrmanntraut** and **ChefKiss** ([ChefKissInc](https://github.com/ChefKissInc))
+  — Inferno, whose work laid the groundwork, including the Apple pointer
+  authentication macOS cannot boot without.
+- **Alexander Graf** — QEMU's `vmapple` machine.
+- **NyanSatan** — [Virtual-iBoot-Fun](https://github.com/NyanSatan/Virtual-iBoot-Fun),
+  the AVPBooter patch.
+- **Makr** ([MakrSas](https://github.com/MakrSas)), with Claude — the iOS port.
 
-Contributions go to hardware and to keeping this maintained. The first target is
-an **arm64 laptop — a Snapdragon X2 Elite Extreme machine, about $1,600**.
+`ATTRIBUTION.md` says exactly what came from where.
 
-That is not a wish-list item. Everything here runs the guest under TCG, because
-the development host is x86-64 and the guest is arm64 — every boot, every test,
-every bisect pays emulation cost. An arm64 host makes the KVM path **testable**
-(see the KVM section in `TECHNICAL.md`, which is written as an open question
-precisely because nobody has been able to try it), and should make development
-considerably faster.
+## Licence
 
-## Licensing and what is not distributed
+QEMU and the changes to it, and the iOS app, are GPL-2.0-or-later; reims-vgpu
+is LGPL-3.0, with its author's permission for use in this app. The details,
+and the licences of the bundled C libraries, are in `LICENSE-NOTICE.md`.
 
-The QEMU changes are GPL-2.0-or-later, like QEMU itself. `reims-vgpu/` is
-[steelbrain/reims-vgpu](https://github.com/steelbrain/reims-vgpu), LGPL-3.0. Parts of the Apple PAC
-support in `target/arm` are derived from the [Inferno](https://github.com/ChefKissInc/Inferno)
-fork of QEMU (ChefKissInc, GPL-2.0-or-later); `TECHNICAL.md` says which.
-
-The AVPBooter patch applied by `scripts/patch-avpbooter.py` is from NyanSatan's
-[Virtual-iBoot-Fun](https://github.com/NyanSatan/Virtual-iBoot-Fun).
-
-**Not included, and not redistributable:** nothing Apple ships is in this
-repository. The macOS image is fetched at run time from the public
-`cirruslabs/macos-ventura-base` image, and Apple's VM firmware
-(`AVPBooter.vmapple2.bin`) is taken out of that image, where macOS itself
-carries it in `Virtualization.framework`. Apple's licence permits macOS
-virtualisation only on Apple-branded hardware — check that your use is within
-it.
-
-## A host quirk worth knowing
-
-If QEMU's `configure` dies with
-
-```
-TypeError: canonicalize_version() got an unexpected keyword argument 'strip_trailing_zero'
-```
-
-an old `packaging` in `~/.local/lib/python3.x/site-packages` is shadowing the
-one in QEMU's build venv. `scripts/build.sh` already exports
-`PYTHONNOUSERSITE=1`, which is the whole fix.
+Unofficial, and not affiliated with Apple or ChefKiss. Apple's licence permits
+macOS virtualisation only on Apple-branded hardware — check that your use is
+within it.

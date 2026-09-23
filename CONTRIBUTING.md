@@ -31,7 +31,7 @@ it runs, so exporting a variable before `ninja` does nothing.
 
 `scripts/README.md` lists what each script does. You need your own
 Apple's VM firmware comes out of the macOS image itself
-(`scripts/extract-avpbooter.py`); no Mac is involved. See `README.md`.
+(`scripts/extract-avpbooter.py`); no Mac is involved. See `LINUX.md`.
 
 ## The evidence rule
 
