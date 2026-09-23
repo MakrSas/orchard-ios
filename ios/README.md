@@ -22,7 +22,12 @@ Nothing Apple ships is in the app or this repository. You bring the macOS VM.
 
 Install macOS Ventura in UTM with **Virtualize**, finish its setup assistant
 there (it is far too slow to do on the phone), then shut it down — not
-suspend — and convert it:
+suspend — and convert it. The converter needs `qemu-img`, from Homebrew's
+QEMU:
+
+```bash
+brew install qemu
+```
 
 ```bash
 python3 scripts/utm-to-orchard.py ~/Library/Containers/com.utmapp.UTM/Data/Documents/Ventura.utm --out-dir ~/Desktop/OrchardVM
@@ -46,13 +51,14 @@ with StikDebug and launch it.
 ## 3. Give it the VM
 
 Either copy the `OrchardVM` folder into **Files → On My iPhone → Orchard**,
-or open **Settings → Where the VM lives → Choose a folder…** and pick it on a
-USB drive. From a drive the VM boots in place; a USB SSD is noticeably faster
-than a flash stick.
+or open the round button in the corner → **Settings… → Where the VM lives →
+Choose a folder…** and pick it on a USB drive. From a drive the VM boots in
+place; a USB SSD is noticeably faster than a flash stick.
 
 ## 4. Settings that matter
 
-All of these apply the next time the machine starts.
+In the round button's **Settings…**. All of these apply the next time the
+machine starts.
 
 * **Machine → Memory**: 2.5 GB with the increased limit, 2 GB without it.
   Under 2 GB macOS reboots in a loop; at 3 GB the app hits the iOS ceiling as
@@ -69,12 +75,23 @@ All of these apply the next time the machine starts.
 * **Screen → Trackpad mode**: the pointer moves by how far the finger travels;
   tap to click, two fingers to right-click and scroll, hold then move to drag.
 
-The first boot to the login window takes several minutes.
+## 5. Start it
+
+Tap the round button in the corner and choose **Start**. The first boot to
+the login window takes several minutes. A machine that has stopped cannot be
+started again in the same run: close the app and open it again.
 
 ## Building from source
 
-On a Mac with Xcode (and its iPhoneOS SDK), rustup, ninja, pkg-config and
-Python 3:
+On a Mac with Xcode (and its iPhoneOS SDK), [rustup](https://rustup.rs) and
+Homebrew. QEMU's configure runs once natively before the iOS build, which is
+what the Homebrew libraries are for:
+
+```bash
+brew install ninja pkgconf glib pixman libslirp qemu
+```
+
+Then:
 
 ```bash
 scripts/fetch-ios-deps.sh

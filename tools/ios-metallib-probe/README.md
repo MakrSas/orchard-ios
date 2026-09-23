@@ -12,7 +12,7 @@ iPhone it is a macOS library loaded by iOS, and nothing short of a device
 settles whether the loader minds.
 
 Nothing else about the port is blocked on this. The backend cross-compiles and
-links for `aarch64-apple-ios` today (`patches/reims-vgpu/0004-*`); this is the
+links for `aarch64-apple-ios` today (the `target_vendor = "apple"` gates in reims-vgpu); this is the
 one runtime unknown big enough to be worth answering before anything else.
 
 ## Run it
@@ -117,8 +117,7 @@ advertises `apple6 apple7 apple8`, while an M1 Mac advertising only
 `apple6 apple7` reads **true**. BC tracks *Mac*, not the family ordinal — no
 iPhone has it, regardless of vintage. A macOS guest believes it is on a Mac and
 will send BC textures; the Vulkan rail already degrades gracefully there and
-the Metal rail has no equivalent gate. See `patches/reims-vgpu/0004-*`, item
-(d).
+the Metal rail has no equivalent gate yet.
 
 ## What the host run established first
 
