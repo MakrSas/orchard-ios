@@ -2863,6 +2863,27 @@ static void vmsa_tcr_el12_write(CPUARMState *env, const ARMCPRegInfo *ri,
     raw_write(env, ri, value);
 }
 
+/*
+ * Whether an ASID change may flush only the lower half of the EL1&0 regime.
+ *
+ * The TLB here is untagged, so a new ASID has to drop whatever the old one
+ * mapped — but only the lower half (TTBR0) can hold ASID-tagged entries when
+ * the upper half is all global, as an XNU kernel's is. Flushing everything
+ * threw away the kernel's translations and its whole jump cache on every
+ * process switch, and on an iPhone running a macOS guest the table walks and
+ * lookups that followed were a large part of the TLB and block-lookup bars.
+ * ORCHARD_ASID_FULL_FLUSH=1 goes back to flushing everything.
+ */
+static bool asid_flush_low_half(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        enabled = g_strcmp0(getenv("ORCHARD_ASID_FULL_FLUSH"), "1") != 0;
+    }
+    return enabled;
+}
+
 static void vmsa_ttbr_write(CPUARMState *env, const ARMCPRegInfo *ri,
                             uint64_t value)
 {
@@ -2870,7 +2891,17 @@ static void vmsa_ttbr_write(CPUARMState *env, const ARMCPRegInfo *ri,
     if (cpreg_field_type(ri) == MO_64 &&
         extract64(raw_read(env, ri) ^ value, 48, 16) != 0) {
         ARMCPU *cpu = env_archcpu(env);
-        tlb_flush(CPU(cpu));
+        bool is_ttbr0 = ri->state == ARM_CP_STATE_AA64 && ri->opc2 == 0;
+        bool asid_in_ttbr1 = extract64(env->cp15.tcr_el[1], 22, 1);   /* TCR.A1 */
+
+        if (asid_flush_low_half() && is_ttbr0 && !asid_in_ttbr1) {
+            tlb_flush_low_half_by_mmuidx(CPU(cpu),
+                                         ARMMMUIdxBit_E10_0 | ARMMMUIdxBit_E10_0_GCS,
+                                         ARMMMUIdxBit_E10_1 | ARMMMUIdxBit_E10_1_PAN |
+                                         ARMMMUIdxBit_E10_1_GCS);
+        } else {
+            tlb_flush(CPU(cpu));
+        }
     }
     raw_write(env, ri, value);
 }

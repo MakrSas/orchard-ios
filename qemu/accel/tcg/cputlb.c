@@ -416,6 +416,64 @@ void tlb_flush_by_mmuidx(CPUState *cpu, MMUIdxMap idxmap)
     tlb_flush_by_mmuidx_async_work(cpu, RUN_ON_CPU_HOST_INT(idxmap));
 }
 
+/* Whether a TLB entry maps a lower-half (TTBR0) address; empty ones are not. */
+static bool tlb_entry_is_low_half(const CPUTLBEntry *e)
+{
+    for (int i = 0; i < 3; i++) {
+        uintptr_t cmp = e->addr_idx[i];
+
+        if (cmp != (uintptr_t)-1) {
+            return !(cmp & (1ull << 63));
+        }
+    }
+    return false;
+}
+
+void tlb_flush_low_half_by_mmuidx(CPUState *cpu, MMUIdxMap full, MMUIdxMap low)
+{
+    int64_t now = get_clock_realtime();
+    CPUJumpCache *jc = cpu->tb_jmp_cache;
+
+    assert_cpu_is_self(cpu);
+    qemu_spin_lock(&cpu->neg.tlb.c.lock);
+
+    for (MMUIdxMap work = full & cpu->neg.tlb.c.dirty; work; work &= work - 1) {
+        tlb_flush_one_mmuidx_locked(cpu, ctz32(work), now);
+    }
+    cpu->neg.tlb.c.dirty &= ~full;
+
+    for (MMUIdxMap work = low & ~full & cpu->neg.tlb.c.dirty; work; work &= work - 1) {
+        int mmu_idx = ctz32(work);
+        CPUTLBDesc *desc = &cpu->neg.tlb.d[mmu_idx];
+        CPUTLBDescFast *fast = cpu_tlb_fast(cpu, mmu_idx);
+        size_t n = tlb_n_entries(fast);
+
+        for (size_t i = 0; i < n; i++) {
+            if (tlb_entry_is_low_half(&fast->table[i])) {
+                memset(&fast->table[i], -1, sizeof(fast->table[i]));
+                tlb_n_used_entries_dec(cpu, mmu_idx);
+            }
+        }
+        for (int k = 0; k < CPU_VTLB_SIZE; k++) {
+            if (tlb_entry_is_low_half(&desc->vtable[k])) {
+                memset(&desc->vtable[k], -1, sizeof(desc->vtable[k]));
+            }
+        }
+    }
+
+    qemu_spin_unlock(&cpu->neg.tlb.c.lock);
+
+    if (jc) {
+        for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
+            if (!(jc->array[i].pc & (1ull << 63))) {
+                qatomic_set(&jc->array[i].tb, NULL);
+            }
+        }
+    }
+    qatomic_set(&cpu->neg.tlb.c.part_flush_count,
+                cpu->neg.tlb.c.part_flush_count + ctpop16(full | low));
+}
+
 void tlb_flush(CPUState *cpu)
 {
     tlb_flush_by_mmuidx(cpu, ALL_MMUIDX_BITS);

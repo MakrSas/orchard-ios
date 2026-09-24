@@ -176,6 +176,19 @@ void tlb_flush_page_by_mmuidx_all_cpus_synced(CPUState *cpu, vaddr addr,
 void tlb_flush_by_mmuidx(CPUState *cpu, MMUIdxMap idxmap);
 
 /**
+ * tlb_flush_low_half_by_mmuidx:
+ * @cpu: CPU whose TLB should be flushed
+ * @full: MMU indexes to flush entirely
+ * @low: MMU indexes of which to flush only the lower half of the VA space
+ *
+ * What an ASID change in the user half (TTBR0) needs when every mapping in
+ * the upper half is global: entries whose address has bit 63 clear go from
+ * the @low indexes, all entries from the @full ones, and the jump cache
+ * loses only the TBs at lower-half addresses. Must be called on @cpu.
+ */
+void tlb_flush_low_half_by_mmuidx(CPUState *cpu, MMUIdxMap full, MMUIdxMap low);
+
+/**
  * tlb_flush_by_mmuidx_all_cpus_synced:
  * @cpu: Originating CPU of the flush
  * @idxmap: bitmap of MMU indexes to flush
