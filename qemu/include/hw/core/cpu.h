@@ -294,6 +294,16 @@ typedef struct CPUTLBDesc {
     CPUTLBEntry vtable[CPU_VTLB_SIZE];
     CPUTLBEntryFull vfulltlb[CPU_VTLB_SIZE];
     CPUTLBEntryFull *fulltlb;
+    /*
+     * Where in the fast table lower-half (bit 63 clear) entries were put
+     * since the last flush, for tlb_flush_low_half_by_mmuidx(): the kernel's
+     * user accesses are few, so clearing them one by one beats scanning a
+     * table of thousands. More than CPU_TLB_LOW_MAX and the index is flushed
+     * whole instead.
+     */
+#define CPU_TLB_LOW_MAX 64
+    uint32_t low_n;
+    uint32_t low_idx[CPU_TLB_LOW_MAX];
 } CPUTLBDesc;
 
 /*

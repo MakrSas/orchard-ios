@@ -283,6 +283,7 @@ static void tlb_mmu_flush_locked(CPUTLBDesc *desc, CPUTLBDescFast *fast)
     desc->large_page_addr = -1;
     desc->large_page_mask = -1;
     desc->vindex = 0;
+    desc->low_n = 0;
     memset(fast->table, -1, sizeof_tlb(fast));
     memset(desc->vtable, -1, sizeof(desc->vtable));
 }
@@ -446,14 +447,21 @@ void tlb_flush_low_half_by_mmuidx(CPUState *cpu, MMUIdxMap full, MMUIdxMap low)
         int mmu_idx = ctz32(work);
         CPUTLBDesc *desc = &cpu->neg.tlb.d[mmu_idx];
         CPUTLBDescFast *fast = cpu_tlb_fast(cpu, mmu_idx);
-        size_t n = tlb_n_entries(fast);
 
-        for (size_t i = 0; i < n; i++) {
-            if (tlb_entry_is_low_half(&fast->table[i])) {
-                memset(&fast->table[i], -1, sizeof(fast->table[i]));
+        if (desc->low_n > CPU_TLB_LOW_MAX) {
+            /* Too many to have kept: the whole index, as before. */
+            tlb_flush_one_mmuidx_locked(cpu, mmu_idx, now);
+            continue;
+        }
+        for (uint32_t k = 0; k < desc->low_n; k++) {
+            CPUTLBEntry *e = &fast->table[desc->low_idx[k]];
+
+            if (tlb_entry_is_low_half(e)) {
+                memset(e, -1, sizeof(*e));
                 tlb_n_used_entries_dec(cpu, mmu_idx);
             }
         }
+        desc->low_n = 0;
         for (int k = 0; k < CPU_VTLB_SIZE; k++) {
             if (tlb_entry_is_low_half(&desc->vtable[k])) {
                 memset(&desc->vtable[k], -1, sizeof(desc->vtable[k]));
@@ -1080,6 +1088,9 @@ static inline void tlb_set_compare(CPUTLBEntryFull *full, CPUTLBEntry *ent,
  * Called from TCG-generated code, which is under an RCU read-side
  * critical section.
  */
+static inline void tlb_note_low_half(CPUState *cpu, size_t mmu_idx,
+                                     size_t index, uint64_t page);
+
 void tlb_set_page_full(CPUState *cpu, int mmu_idx,
                        vaddr addr, CPUTLBEntryFull *full)
 {
@@ -1239,6 +1250,7 @@ void tlb_set_page_full(CPUState *cpu, int mmu_idx,
 
     copy_tlb_helper_locked(te, &tn);
     tlb_n_used_entries_inc(cpu, mmu_idx);
+    tlb_note_low_half(cpu, mmu_idx, index, addr_page);
     qemu_spin_unlock(&tlb->c.lock);
 }
 
@@ -1362,6 +1374,23 @@ static void io_failed(CPUState *cpu, CPUTLBEntryFull *full, vaddr addr,
 
 /* Return true if ADDR is present in the victim tlb, and has been copied
    back to the main tlb.  */
+/* Remember that table[@index] of @mmu_idx may now map a lower-half page. */
+static inline void tlb_note_low_half(CPUState *cpu, size_t mmu_idx,
+                                     size_t index, uint64_t page)
+{
+    CPUTLBDesc *d = &cpu->neg.tlb.d[mmu_idx];
+
+    if (page & (1ull << 63)) {
+        return;
+    }
+    if (d->low_n < CPU_TLB_LOW_MAX) {
+        d->low_idx[d->low_n] = index;
+    }
+    if (d->low_n <= CPU_TLB_LOW_MAX) {
+        d->low_n++;
+    }
+}
+
 static bool victim_tlb_hit(CPUState *cpu, size_t mmu_idx, size_t index,
                            MMUAccessType access_type, vaddr page)
 {
@@ -1380,6 +1409,7 @@ static bool victim_tlb_hit(CPUState *cpu, size_t mmu_idx, size_t index,
             copy_tlb_helper_locked(&tmptlb, tlb);
             copy_tlb_helper_locked(tlb, vtlb);
             copy_tlb_helper_locked(vtlb, &tmptlb);
+            tlb_note_low_half(cpu, mmu_idx, index, page);
             qemu_spin_unlock(&cpu->neg.tlb.c.lock);
 
             CPUTLBEntryFull *f1 = &cpu->neg.tlb.d[mmu_idx].fulltlb[index];
