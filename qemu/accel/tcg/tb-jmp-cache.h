@@ -36,6 +36,12 @@
 typedef struct CPUJumpCache {
     struct rcu_head rcu;
     uint32_t gen;
+    /*
+     * Counters for the app's profile line (orchard_tcg_stats). Each is
+     * written by its own vCPU only, except 'flushes', which other vCPUs
+     * bump atomically.
+     */
+    uint64_t lookups, misses, translations, exceptions, flushes;
     struct {
         TranslationBlock *tb;
         vaddr pc;

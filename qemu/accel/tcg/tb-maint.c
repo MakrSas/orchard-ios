@@ -897,9 +897,28 @@ static void tb_jmp_cache_inval_tb(TranslationBlock *tb)
     CPUState *cpu;
 
     if (tb_cflags(tb) & CF_PCREL) {
-        /* A TB may be at any virtual address */
-        CPU_FOREACH(cpu) {
-            tcg_flush_jmp_cache(cpu);
+        /*
+         * A TB may be at any virtual address, so upstream empties every
+         * vCPU's jump cache here, for each TB invalidated. There is no need:
+         * do_tb_phys_invalidate() set CF_INVALID before calling us, and
+         * tb_lookup() takes a jump-cache entry only when the TB's cflags
+         * equal the wanted ones, which never have CF_INVALID. A stale entry
+         * is a miss and gets overwritten; the TB's memory is not reused
+         * before tb_flush(), which empties the caches itself. A macOS guest
+         * rewrites code pages all the time (dyld, JavaScript), and each
+         * flush sent both vCPUs back to the hash table for every branch.
+         * ORCHARD_PCREL_JC_FLUSH=1 restores the upstream flush.
+         */
+        static int upstream = -1;
+
+        if (unlikely(upstream < 0)) {
+            const char *e = getenv("ORCHARD_PCREL_JC_FLUSH");
+            upstream = e && *e == '1';
+        }
+        if (upstream) {
+            CPU_FOREACH(cpu) {
+                tcg_flush_jmp_cache(cpu);
+            }
         }
     } else {
         uint32_t h = tb_jmp_cache_hash_func(tb->pc);

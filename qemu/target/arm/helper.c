@@ -3423,7 +3423,32 @@ static void sctlr_write(CPUARMState *env, const ARMCPRegInfo *ri,
         return;
     }
 
+    uint64_t changed = raw_read(env, ri) ^ value;
+
     raw_write(env, ri, value);
+
+    /*
+     * Bits no page table walk and no TLB entry depends on: pointer
+     * authentication enables, EL0 cache and trap controls, alignment
+     * (a TB flag, rebuilt with the hflags after this write), BTI, SPAN.
+     * macOS changes some of these on context switches; the whole TLB
+     * need not go with them. ORCHARD_SCTLR_FULL_FLUSH=1 flushes always.
+     */
+    static int full_flush = -1;
+    const uint64_t no_tlb = SCTLR_A | SCTLR_SA | SCTLR_SA0 | SCTLR_UMA |
+        SCTLR_EnRCTX | SCTLR_EOS | SCTLR_EnDB | SCTLR_DZE | SCTLR_UCT |
+        SCTLR_nTWI | SCTLR_nTWE | SCTLR_IESB | SCTLR_EIS | SCTLR_SPAN |
+        SCTLR_UCI | SCTLR_EnDA | SCTLR_EnIB | SCTLR_EnIA | SCTLR_BT0 |
+        SCTLR_BT1 | SCTLR_DSSBS_64;
+
+    if (unlikely(full_flush < 0)) {
+        full_flush = g_str_equal(g_getenv("ORCHARD_SCTLR_FULL_FLUSH") ?: "",
+                                 "1");
+    }
+    if (ri->state == ARM_CP_STATE_AA64 && !full_flush &&
+        !(changed & ~no_tlb)) {
+        return;
+    }
 
     /* This may enable/disable the MMU, so do a TLB flush.  */
     tlb_flush(CPU(cpu));

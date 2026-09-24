@@ -46,6 +46,8 @@ enum Sampler {
             guard !busy.isEmpty else {
                 return completion(L("Пробник: не удалось определить занятый поток"))
             }
+            let tcgBefore = tcgStats()
+            let started = Date()
             var bySymbol: [String: Int] = [:]
             var byGroup: [String: Int] = [:]
             var total = 0
@@ -71,8 +73,35 @@ enum Sampler {
             for (name, n) in bySymbol.sorted(by: { $0.value > $1.value }).prefix(30) {
                 lines.append("  \(percent(n))  \(name)")
             }
+            if let before = tcgBefore, let after = tcgStats() {
+                lines.append(tcgLine(before, after, Date().timeIntervalSince(started)))
+            }
             completion(lines.joined(separator: "\n"))
         }
+    }
+
+    private typealias TCGStatsFn = @convention(c) (UnsafeMutablePointer<UInt64>, Int) -> Void
+
+    /// The emulator's running totals (see orchard_tcg_stats in cpu-exec.c).
+    private static func tcgStats() -> [UInt64]? {
+        guard let sym = QemuBridge.shared.symbol("orchard_tcg_stats") else { return nil }
+        var v = [UInt64](repeating: 0, count: 10)
+        v.withUnsafeMutableBufferPointer { unsafeBitCast(sym, to: TCGStatsFn.self)($0.baseAddress!, 10) }
+        return v
+    }
+
+    /// Per-second rates over the sampling window: how often the jump cache
+    /// missed, and how often something emptied a cache or stopped both cores.
+    private static func tcgLine(_ a: [UInt64], _ b: [UInt64], _ secs: Double) -> String {
+        let d = zip(a, b).map { Double($1 &- $0) / max(secs, 0.1) }
+        let miss = d[0] > 0 ? d[1] * 100 / d[0] : 0
+        func k(_ x: Double) -> String { x >= 10000 ? String(format: "%.0fk", x / 1000) : String(format: "%.0f", x) }
+        return "  TCG/s: " + [
+            "lookups \(k(d[0])) (miss \(String(format: "%.1f%%", miss)))",
+            "translated \(k(d[2]))", "exceptions \(k(d[3]))",
+            "jc flushes \(k(d[4]))", "invalidated \(k(d[5]))", "tb_flush \(k(d[6]))",
+            "stop-all \(k(d[7]))", "tlb full \(k(d[8]))", "tlb part \(k(d[9]))",
+        ].joined(separator: " · ")
     }
 
     /// The function a PC is in, or the translator's buffer when it is in none.

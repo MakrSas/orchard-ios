@@ -715,9 +715,13 @@ static void mach_vmapple_init(MachineState *machine)
 
         /*
          * Nothing wires a PMU overflow interrupt on this machine, and KVM
-         * refuses to run a vCPU whose in-kernel PMU has no interrupt.
+         * refuses to run a vCPU whose in-kernel PMU has no interrupt. Under
+         * TCG the PMU only costs: its counters are brought up to date on
+         * every exception entry and return, and macOS boots without one
+         * under KVM. ORCHARD_PMU=1 keeps it for TCG.
          */
-        if (kvm_enabled() && object_property_find(cpu, "pmu")) {
+        if ((kvm_enabled() || !g_str_equal(g_getenv("ORCHARD_PMU") ?: "", "1")) &&
+            object_property_find(cpu, "pmu")) {
             object_property_set_bool(cpu, "pmu", false, &error_fatal);
         }
 

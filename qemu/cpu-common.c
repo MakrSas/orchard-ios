@@ -324,10 +324,19 @@ void cpu_exec_end(CPUState *cpu)
     trace_cpu_exec_end(cpu->cpu_index);
 }
 
+#ifdef CONFIG_ORCHARD_EMBED
+/* Work that stops every vCPU, counted for orchard_tcg_stats. */
+uint64_t orchard_exclusive_work;
+#endif
+
 void async_safe_run_on_cpu(CPUState *cpu, run_on_cpu_func func,
                            run_on_cpu_data data)
 {
     struct qemu_work_item *wi;
+
+#ifdef CONFIG_ORCHARD_EMBED
+    qatomic_inc(&orchard_exclusive_work);
+#endif
 
     wi = g_new0(struct qemu_work_item, 1);
     wi->func = func;

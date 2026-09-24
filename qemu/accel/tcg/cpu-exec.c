@@ -238,6 +238,7 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
 
     hash = tb_jmp_cache_hash_func(s.pc);
     jc = cpu->tb_jmp_cache;
+    jc->lookups++;
 
     tb = qatomic_read(&jc->array[hash].tb);
     if (likely(tb &&
@@ -249,6 +250,7 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
         goto hit;
     }
 
+    jc->misses++;
     tb = tb_htable_lookup(cpu, s);
     if (tb == NULL) {
         return NULL;
@@ -368,6 +370,20 @@ static inline bool check_for_breakpoints(CPUState *cpu, vaddr pc,
         check_for_breakpoints_slow(cpu, pc, cflags);
 }
 
+/*
+ * curr_cflags() for the end of every indirect branch: the usual answer,
+ * cpu->tcg_cflags, without the call. The rest is left to curr_cflags().
+ */
+static inline uint32_t curr_cflags_inline(CPUState *cpu)
+{
+    if (likely(!cpu_single_stepping(cpu) &&
+               !qatomic_read(&one_insn_per_tb) &&
+               !qemu_loglevel_mask(CPU_LOG_TB_NOCHAIN))) {
+        return cpu->tcg_cflags;
+    }
+    return curr_cflags(cpu);
+}
+
 /**
  * helper_lookup_tb_ptr: quick check for next tb
  * @env: current cpu state
@@ -391,7 +407,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
     cpu->neg.can_do_io = true;
 
     TCGTBCPUState s = cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
-    s.cflags = curr_cflags(cpu);
+    s.cflags = curr_cflags_inline(cpu);
 
     if (check_for_breakpoints(cpu, s.pc, &s.cflags)) {
         cpu_loop_exit(cpu);
@@ -408,6 +424,43 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
 
     return tb->tc.ptr;
 }
+
+#ifdef CONFIG_ORCHARD_EMBED
+extern uint64_t orchard_exclusive_work;
+
+/*
+ * Totals since boot, summed over the vCPUs, for the app's profile line:
+ * [0] jump-cache lookups, [1] of them missed, [2] blocks translated,
+ * [3] guest exceptions and interrupts taken, [4] jump-cache flushes,
+ * [5] blocks invalidated, [6] whole code-buffer flushes, [7] work that
+ * stopped every vCPU, [8] whole-TLB flushes, [9] partial TLB flushes.
+ * Reads race the vCPUs; the numbers are for rates, not exact.
+ */
+void orchard_tcg_stats(uint64_t *out, size_t n);
+void orchard_tcg_stats(uint64_t *out, size_t n)
+{
+    uint64_t v[10] = { 0 };
+    CPUState *cpu;
+
+    CPU_FOREACH(cpu) {
+        CPUJumpCache *jc = cpu->tb_jmp_cache;
+
+        if (jc) {
+            v[0] += qatomic_read(&jc->lookups);
+            v[1] += qatomic_read(&jc->misses);
+            v[2] += qatomic_read(&jc->translations);
+            v[3] += qatomic_read(&jc->exceptions);
+            v[4] += qatomic_read(&jc->flushes);
+        }
+        v[8] += qatomic_read(&cpu->neg.tlb.c.full_flush_count);
+        v[9] += qatomic_read(&cpu->neg.tlb.c.part_flush_count);
+    }
+    v[5] = qatomic_read(&tb_ctx.tb_phys_invalidate_count);
+    v[6] = qatomic_read(&tb_ctx.tb_flush_count);
+    v[7] = qatomic_read(&orchard_exclusive_work);
+    memcpy(out, v, MIN(n, ARRAY_SIZE(v)) * sizeof(uint64_t));
+}
+#endif
 
 /* Return the current PC from CPU, which may be cached in TB. */
 static vaddr log_pc(CPUState *cpu, const TranslationBlock *tb)
@@ -731,6 +784,7 @@ static inline bool cpu_handle_exception(CPUState *cpu, int *excp)
         tcg_ops->do_interrupt(cpu);
         bql_unlock();
         cpu->exception_index = -1;
+        cpu->tb_jmp_cache->exceptions++;
 
         if (unlikely(cpu_single_stepping(cpu))) {
             /*
@@ -979,6 +1033,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                  */
                 h = tb_jmp_cache_hash_func(s.pc);
                 jc = cpu->tb_jmp_cache;
+                jc->translations++;
                 jc->array[h].pc = s.pc;
                 jc->array[h].gen = qatomic_read(&jc->gen);
                 qatomic_set(&jc->array[h].tb, tb);
