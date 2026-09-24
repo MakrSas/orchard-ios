@@ -81,6 +81,11 @@ machine starts.
 * **Screen → Trackpad mode**: the pointer moves by how far the finger travels;
   tap to click, two fingers to right-click and scroll, hold then move to drag.
 
+In the guest itself, **System Settings → Accessibility → Display → Reduce
+transparency** helps noticeably, dragging windows above all: without it macOS
+re-renders the blur behind every translucent window, Dock and menu bar for
+each frame, all on the emulated CPU.
+
 ## 5. Start it
 
 Tap the round button in the corner and choose **Start**. The first boot to
