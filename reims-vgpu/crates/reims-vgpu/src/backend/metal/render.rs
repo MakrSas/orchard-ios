@@ -1765,8 +1765,55 @@ mod attachment_decline_tests {
 /// such a target from the CPU first calls [`wait_pending`].
 static PENDING: parking_lot::Mutex<Vec<CommandBuffer>> = parking_lot::Mutex::new(Vec::new());
 
+/// A render pass a chain's intermediate record left open, so the chain's next
+/// record draws into the same encoder: one pass for the whole chain, as the
+/// guest encoded it, instead of one per draw, each loading and storing the
+/// whole attachment on the GPU.
+struct OpenPass {
+    command_buffer: CommandBuffer,
+    encoder: RenderCommandEncoder,
+    /// (slot, texture) of every colour target, by identity.
+    targets: Vec<(u32, usize)>,
+    width: u32,
+    height: u32,
+}
+
+// SAFETY: Metal command buffers and encoders may be used from any thread, one
+// at a time; the mutex below is that one at a time.
+unsafe impl Send for OpenPass {}
+
+static OPEN: parking_lot::Mutex<Option<OpenPass>> = parking_lot::Mutex::new(None);
+
+fn close_pass(pass: OpenPass) {
+    pass.encoder.end_encoding();
+    pass.command_buffer.commit();
+    PENDING.lock().push(pass.command_buffer);
+}
+
+/// End and commit the pass a chain left open, if any.
+pub fn close_open_pass() {
+    let open = OPEN.lock().take();
+    if let Some(pass) = open {
+        close_pass(pass);
+    }
+}
+
+/// Commits a continued chain's command buffer if the draw bails out after
+/// taking it, so the records already encoded in it still run.
+struct CommitOnBail(Option<CommandBuffer>);
+
+impl Drop for CommitOnBail {
+    fn drop(&mut self) {
+        if let Some(command_buffer) = self.0.take() {
+            command_buffer.commit();
+            PENDING.lock().push(command_buffer);
+        }
+    }
+}
+
 /// Wait for every command buffer [`render_core_mrt`] left running.
 pub fn wait_pending() {
+    close_open_pass();
     let pending = std::mem::take(&mut *PENDING.lock());
     for command_buffer in pending {
         command_buffer.wait_until_completed();
@@ -1842,6 +1889,12 @@ fn host_buffer(device: &Device, data: *const u8, len: usize) -> Option<(Buffer, 
         }
     }
     new_buffer_from_host(device, data, len).map(|b| (b, 0))
+}
+
+/// Whether every draw gets its own pass as before (ORCHARD_METAL_PASS_PER_DRAW=1).
+fn metal_pass_per_draw() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("ORCHARD_METAL_PASS_PER_DRAW").is_ok_and(|v| v == "1"))
 }
 
 /// Multi-render-target encode: one Metal pass with color attachments at given slots.
@@ -1975,7 +2028,10 @@ pub fn render_core_mrt(
             .as_ref()
             .is_some_and(|s| s.store_action == REIMS_VGPU_MTL_STORE_ACTION_STORE);
     let _copy_host_buffers = crate::backend::metal::runtime::ForceCopy::new(!reads_back);
-    RING_IN_DRAW.with(|f| f.set(false));
+    // An open pass holds ring space from the chain's earlier records, which a
+    // wrap would overwrite before they run.
+    let ring_held = OPEN.lock().is_some();
+    RING_IN_DRAW.with(|f| f.set(ring_held));
     // Widened here rather than at the call, so the `as usize` on each of these
     // happens once and the caller passes the decoded draw whole. These were five
     // positional parameters, four of them `usize`; the sole caller reached them
@@ -2389,16 +2445,73 @@ pub fn render_core_mrt(
     // Finer cuts of metal_encode_us, for deciding what one encoder per chain
     // (instead of per draw) would save.
     let span_open = crate::runtime::chain_phase::CostSpan::new("metal_enc_open_us");
-    let queue = thread_queue(device);
-    let Some(command_buffer) = crate::backend::metal::raw_metal::new_command_buffer(&queue) else {
-        return Status::execute("metal_render_command_buffer_unavailable");
+    // Continue the pass the chain's previous record left open when this draw
+    // renders into exactly its targets, loads them, and brings no attachment
+    // or query of its own that would need a pass to itself.
+    let targets: Vec<(u32, usize)> = color_textures
+        .iter()
+        .map(|(slot, t, _)| (*slot, t.as_ptr() as usize))
+        .collect();
+    let pass_free = depth_attachment.is_none()
+        && stencil_attachment.is_none()
+        && visibility_mode.is_none()
+        && colors.iter().all(|c| c.retained.is_some());
+    let loads = colors.iter().all(|c| {
+        color_rt_load_action(c.load_action, c.prior_content_present())
+            == crate::backend::metal::abi::REIMS_VGPU_MTL_LOAD_ACTION_LOAD
+    });
+    let continued = {
+        let open = OPEN.lock().take();
+        match open {
+            Some(o)
+                if pass_free
+                    && loads
+                    && !metal_pass_per_draw()
+                    && o.targets == targets
+                    && o.width == width
+                    && o.height == height =>
+            {
+                Some(o)
+            }
+            Some(o) => {
+                close_pass(o);
+                None
+            }
+            None => None,
+        }
     };
-    let command_buffer = command_buffer.to_owned();
-    let Some(encoder) =
-        crate::backend::metal::raw_metal::new_render_command_encoder(&command_buffer, pass)
-    else {
-        return Status::execute("metal_render_encoder_unavailable");
+    let mut bail = CommitOnBail(None);
+    let (command_buffer, encoder_owned) = match continued {
+        Some(o) => {
+            // A new pass would start from Metal's defaults; this one carries
+            // the previous draw's, so put back what the draw may not set.
+            o.encoder.set_cull_mode(MTLCullMode::None);
+            o.encoder.set_front_facing_winding(MTLWinding::Clockwise);
+            o.encoder.set_triangle_fill_mode(MTLTriangleFillMode::Fill);
+            o.encoder.set_depth_clip_mode(MTLDepthClipMode::Clip);
+            o.encoder.set_depth_bias(0.0, 0.0, 0.0);
+            o.encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
+            bail.0 = Some(o.command_buffer.clone());
+            crate::runtime::drain::note_store_route("metal_pass_continued");
+            (o.command_buffer, o.encoder)
+        }
+        None => {
+            let queue = thread_queue(device);
+            let Some(command_buffer) = crate::backend::metal::raw_metal::new_command_buffer(&queue)
+            else {
+                return Status::execute("metal_render_command_buffer_unavailable");
+            };
+            let command_buffer = command_buffer.to_owned();
+            let Some(encoder) =
+                crate::backend::metal::raw_metal::new_render_command_encoder(&command_buffer, pass)
+            else {
+                return Status::execute("metal_render_encoder_unavailable");
+            };
+            let encoder = encoder.to_owned();
+            (command_buffer, encoder)
+        }
     };
+    let encoder: &RenderCommandEncoderRef = &encoder_owned;
     drop(span_open);
     let span_state = crate::runtime::chain_phase::CostSpan::new("metal_enc_state_us");
     encoder.set_render_pipeline_state(&pso);
@@ -2669,9 +2782,25 @@ pub fn render_core_mrt(
         encoder.draw_primitives(prim, first_vertex as u64, vertex_count as u64);
     }
 
-    encoder.end_encoding();
     drop(span_draw);
     drop(span_encode);
+    // The chain goes on: leave the pass open for its next record.
+    if !reads_back && pass_free && !metal_pass_per_draw() {
+        bail.0 = None;
+        *OPEN.lock() = Some(OpenPass {
+            command_buffer,
+            encoder: encoder_owned,
+            targets,
+            width,
+            height,
+        });
+        crate::runtime::drain::note_store_route("metal_chain_record_unwaited");
+        clear_err(err);
+        let _ = retained_buf;
+        return Status::OK;
+    }
+    bail.0 = None;
+    encoder.end_encoding();
 
     // One command buffer, one pass, one blocking round trip, per decoded draw.
     // Item 1 of the ranking in this function's own doc, and the only one of the
