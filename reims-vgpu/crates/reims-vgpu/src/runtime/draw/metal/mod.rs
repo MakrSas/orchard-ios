@@ -1309,12 +1309,16 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
             _ => None,
         };
         let mut gva_partial = seed_for_store.is_some() && store_rect.is_some();
-        // A chain that stayed on the GPU: its target equals the guest's pages
-        // outside what its records drew over, so only that is written back, and
-        // the target then holds the whole frame again (ceded below).
+        // A retained target equals the guest's pages outside what was drawn
+        // over — by this record alone, or by a chain that stayed on the GPU —
+        // so only that is written back, and the target then holds the whole
+        // frame again (ceded below). A lone draw into a target that already
+        // held the frame has no CPU seed, and so used to store the whole frame.
         let chain_area = chain_areas[i];
-        let chain_partial = req.chain_from_resident
-            && c.mapping_id != 0
+        // A multi-draw's last record chained through the CPU (not the GPU)
+        // knows only its own scissor, not what the records before it drew.
+        let chain_partial = c.mapping_id != 0
+            && (req.chain_from_resident || !force_full_store)
             && resident_plan.get(i).is_some_and(Option::is_some)
             && !chain_area.full
             && !chain_area.is_empty()
