@@ -42,6 +42,8 @@ typedef struct CPUJumpCache {
      * bump atomically.
      */
     uint64_t lookups, misses, translations, exceptions, flushes;
+    /* Why lookups missed: an emptied slot, another pc's, this pc's other TB */
+    uint64_t miss_empty, miss_other_pc, miss_same_pc;
     struct {
         TranslationBlock *tb;
         vaddr pc;

@@ -236,7 +236,7 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
     /* we should never be trying to look up an INVALID tb */
     tcg_debug_assert(!(s.cflags & CF_INVALID));
 
-    hash = tb_jmp_cache_hash_func(s.pc);
+    hash = tb_jmp_cache_hash_func(s.pc, s.flags, s.cs_base);
     jc = cpu->tb_jmp_cache;
     jc->lookups++;
 
@@ -251,6 +251,13 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
     }
 
     jc->misses++;
+    if (!tb || jc->array[hash].gen != qatomic_read(&jc->gen)) {
+        jc->miss_empty++;
+    } else if (jc->array[hash].pc != s.pc) {
+        jc->miss_other_pc++;
+    } else {
+        jc->miss_same_pc++;
+    }
     tb = tb_htable_lookup(cpu, s);
     if (tb == NULL) {
         return NULL;
@@ -433,13 +440,15 @@ extern uint64_t orchard_exclusive_work;
  * [0] jump-cache lookups, [1] of them missed, [2] blocks translated,
  * [3] guest exceptions and interrupts taken, [4] jump-cache flushes,
  * [5] blocks invalidated, [6] whole code-buffer flushes, [7] work that
- * stopped every vCPU, [8] whole-TLB flushes, [9] partial TLB flushes.
+ * stopped every vCPU, [8] whole-TLB flushes, [9] partial TLB flushes,
+ * and of the misses: [10] the slot was empty, [11] held another pc,
+ * [12] held another TB for the same pc.
  * Reads race the vCPUs; the numbers are for rates, not exact.
  */
 void orchard_tcg_stats(uint64_t *out, size_t n);
 void orchard_tcg_stats(uint64_t *out, size_t n)
 {
-    uint64_t v[10] = { 0 };
+    uint64_t v[13] = { 0 };
     CPUState *cpu;
 
     CPU_FOREACH(cpu) {
@@ -451,6 +460,9 @@ void orchard_tcg_stats(uint64_t *out, size_t n)
             v[2] += qatomic_read(&jc->translations);
             v[3] += qatomic_read(&jc->exceptions);
             v[4] += qatomic_read(&jc->flushes);
+            v[10] += qatomic_read(&jc->miss_empty);
+            v[11] += qatomic_read(&jc->miss_other_pc);
+            v[12] += qatomic_read(&jc->miss_same_pc);
         }
         v[8] += qatomic_read(&cpu->neg.tlb.c.full_flush_count);
         v[9] += qatomic_read(&cpu->neg.tlb.c.part_flush_count);
@@ -1031,7 +1043,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                  * We add the TB in the virtual pc hash table
                  * for the fast lookup
                  */
-                h = tb_jmp_cache_hash_func(s.pc);
+                h = tb_jmp_cache_hash_func(s.pc, s.flags, s.cs_base);
                 jc = cpu->tb_jmp_cache;
                 jc->translations++;
                 jc->array[h].pc = s.pc;

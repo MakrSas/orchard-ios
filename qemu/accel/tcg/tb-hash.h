@@ -43,18 +43,31 @@ static inline unsigned int tb_jmp_cache_hash_page(vaddr pc)
     return (tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK;
 }
 
-static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
+/*
+ * The slot within the page's group of TB_JMP_PAGE_SIZE: upstream took
+ * (pc ^ pc >> 8) & 63, which never sees pc bits 6 and 7, so on a 16 KiB
+ * page four instructions 64 bytes apart share a slot. This folds in every
+ * bit of the offset, and the TB flags too: a kernel routine run both with
+ * and without PAN (copyin, copyout) is two TBs at one pc, and they no
+ * longer take turns evicting each other. The page's group is unchanged, so
+ * tb_jmp_cache_clear_page() still finds every entry of a page.
+ */
+static inline unsigned int tb_jmp_cache_hash_func(vaddr pc, uint32_t flags,
+                                                  uint64_t cs_base)
 {
     vaddr tmp;
+    uint64_t f = (flags ^ cs_base) * 0x9e3779b97f4a7c15ull;
+
     tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
     return (((tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK)
-           | (tmp & TB_JMP_ADDR_MASK));
+           | (((pc >> 2) ^ (pc >> 8) ^ (f >> 58)) & TB_JMP_ADDR_MASK));
 }
 
 #else
 
 /* In user-mode we can get better hashing because we do not have a TLB */
-static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
+static inline unsigned int tb_jmp_cache_hash_func(vaddr pc, uint32_t flags,
+                                                  uint64_t cs_base)
 {
     return (pc ^ (pc >> TB_JMP_CACHE_BITS)) & (TB_JMP_CACHE_SIZE - 1);
 }

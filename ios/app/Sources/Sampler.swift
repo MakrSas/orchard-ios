@@ -85,8 +85,8 @@ enum Sampler {
     /// The emulator's running totals (see orchard_tcg_stats in cpu-exec.c).
     private static func tcgStats() -> [UInt64]? {
         guard let sym = QemuBridge.shared.symbol("orchard_tcg_stats") else { return nil }
-        var v = [UInt64](repeating: 0, count: 10)
-        v.withUnsafeMutableBufferPointer { unsafeBitCast(sym, to: TCGStatsFn.self)($0.baseAddress!, 10) }
+        var v = [UInt64](repeating: 0, count: 13)
+        v.withUnsafeMutableBufferPointer { unsafeBitCast(sym, to: TCGStatsFn.self)($0.baseAddress!, 13) }
         return v
     }
 
@@ -97,7 +97,7 @@ enum Sampler {
         let miss = d[0] > 0 ? d[1] * 100 / d[0] : 0
         func k(_ x: Double) -> String { x >= 10000 ? String(format: "%.0fk", x / 1000) : String(format: "%.0f", x) }
         return "  TCG/s: " + [
-            "lookups \(k(d[0])) (miss \(String(format: "%.1f%%", miss)))",
+            "lookups \(k(d[0])) (miss \(String(format: "%.1f%%", miss)): empty \(k(d[10])), other pc \(k(d[11])), same pc \(k(d[12])))",
             "translated \(k(d[2]))", "exceptions \(k(d[3]))",
             "jc flushes \(k(d[4]))", "invalidated \(k(d[5]))", "tb_flush \(k(d[6]))",
             "stop-all \(k(d[7]))", "tlb full \(k(d[8]))", "tlb part \(k(d[9]))",

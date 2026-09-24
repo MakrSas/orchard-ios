@@ -147,18 +147,33 @@ static void tlb_window_reset(CPUTLBDesc *desc, int64_t ns,
     desc->window_max_entries = max_entries;
 }
 
-static void tb_jmp_cache_clear_page(CPUState *cpu, vaddr page_addr)
+/*
+ * Empty the jump-cache entries of TBs that start on @page_addr, comparing
+ * the low @bits of the address as the flush does. The page's group of slots
+ * is shared with every page that hashes alike, and upstream emptied the whole
+ * group; on a macOS guest that is some ten thousand times a second, each
+ * taking hot entries of unrelated pages with it. Entries are written only
+ * by their own vCPU, which is the one running this.
+ */
+static void tb_jmp_cache_clear_page(CPUState *cpu, vaddr page_addr,
+                                    unsigned bits)
 {
     CPUJumpCache *jc = cpu->tb_jmp_cache;
+    vaddr mask = TARGET_PAGE_MASK;
     int i, i0;
 
     if (unlikely(!jc)) {
         return;
     }
+    if (bits < 64) {
+        mask &= MAKE_64BIT_MASK(0, bits);
+    }
 
     i0 = tb_jmp_cache_hash_page(page_addr);
     for (i = 0; i < TB_JMP_PAGE_SIZE; i++) {
-        qatomic_set(&jc->array[i0 + i].tb, NULL);
+        if (!((jc->array[i0 + i].pc ^ page_addr) & mask)) {
+            qatomic_set(&jc->array[i0 + i].tb, NULL);
+        }
     }
 }
 
@@ -616,8 +631,8 @@ static void tlb_flush_page_by_mmuidx_async_0(CPUState *cpu,
      * Discard jump cache entries for any tb which might potentially
      * overlap the flushed page, which includes the previous.
      */
-    tb_jmp_cache_clear_page(cpu, addr - TARGET_PAGE_SIZE);
-    tb_jmp_cache_clear_page(cpu, addr);
+    tb_jmp_cache_clear_page(cpu, addr - TARGET_PAGE_SIZE, 64);
+    tb_jmp_cache_clear_page(cpu, addr, 64);
 }
 
 /**
@@ -817,7 +832,7 @@ static void tlb_flush_range_by_mmuidx_async_0(CPUState *cpu,
      */
     d.addr -= TARGET_PAGE_SIZE;
     for (vaddr i = 0, n = d.len / TARGET_PAGE_SIZE + 1; i < n; i++) {
-        tb_jmp_cache_clear_page(cpu, d.addr);
+        tb_jmp_cache_clear_page(cpu, d.addr, d.bits);
         d.addr += TARGET_PAGE_SIZE;
     }
 }
