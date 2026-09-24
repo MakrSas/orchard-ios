@@ -2816,7 +2816,18 @@ pub fn render_core_mrt(
         let _ = retained_buf;
         return Status::OK;
     }
-    command_buffer.wait_until_completed();
+    {
+        // The wait, by what the pass rendered into: retained targets (window
+        // surfaces) or the guest's own textures.
+        let _span_wait = crate::runtime::chain_phase::CostSpan::new(
+            if colors.iter().all(|c| c.retained.is_some()) {
+                "metal_wait_resident_us"
+            } else {
+                "metal_wait_gva_us"
+            },
+        );
+        command_buffer.wait_until_completed();
+    }
     // Queued ahead of this one, so already done; this only drops the handle.
     wait_pending();
     drop(span_commit);

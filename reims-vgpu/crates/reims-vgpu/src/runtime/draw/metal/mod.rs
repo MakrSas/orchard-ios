@@ -1335,6 +1335,12 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
         } else {
             store_rect
         };
+        // Cut store_us by destination, for deciding which store to take apart.
+        let _span_dest = chain_phase::CostSpan::new(if c.mapping_id != 0 {
+            "metal_store_mapping_us"
+        } else {
+            "metal_store_gva_us"
+        });
         let wrote = if c.mapping_id != 0 {
             if gva_partial {
                 let r = store_rect.expect("gva_partial implies exactly one narrowing rect");
@@ -1449,6 +1455,7 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
             }
             // Early-boot logo+pill: paint mapper-ref-texture front before first DisplaySwap.
             if c.mapping_id != 0 {
+                let _span_front = chain_phase::CostSpan::new("metal_store_front_us");
                 crate::runtime::scanout::note_front_buffer_writeback(
                     state,
                     host,
@@ -1481,6 +1488,7 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
         .into_iter()
         .flatten()
     {
+        let _span_depth = chain_phase::CostSpan::new("metal_store_depth_us");
         seeded.store_back(state, host, (width, height));
     }
     // Moved, not cloned; see the early return above.
