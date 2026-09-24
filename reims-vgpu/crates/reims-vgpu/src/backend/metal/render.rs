@@ -1798,16 +1798,6 @@ pub fn close_open_pass() {
     }
 }
 
-thread_local! {
-    static CHAIN_CONTINUES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Whether the draw about to be encoded is followed by another record of the
-/// same chain, and so may leave its pass open.
-pub fn set_chain_continues(on: bool) {
-    CHAIN_CONTINUES.with(|c| c.set(on));
-}
-
 /// Commits a continued chain's command buffer if the draw bails out after
 /// taking it, so the records already encoded in it still run.
 struct CommitOnBail(Option<CommandBuffer>);
@@ -2795,7 +2785,7 @@ pub fn render_core_mrt(
     drop(span_draw);
     drop(span_encode);
     // The chain goes on: leave the pass open for its next record.
-    if !reads_back && pass_free && !metal_pass_per_draw() && CHAIN_CONTINUES.with(|c| c.get()) {
+    if !reads_back && pass_free && !metal_pass_per_draw() {
         bail.0 = None;
         *OPEN.lock() = Some(OpenPass {
             command_buffer,

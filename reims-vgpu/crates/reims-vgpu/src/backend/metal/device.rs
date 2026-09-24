@@ -120,23 +120,6 @@ impl Backend for MetalBackend {
         draw::metal::encode_draw_chain(state, host, req, writeback_guest, force_full_store)
     }
 
-    /// Pay a surface Store this rail deferred (runtime/writeback_debt.rs): read
-    /// the retained target and land it in the mapping's guest pages.
-    fn pay_surface_writeback<M: HostMemory + HostOps>(
-        &self,
-        state: &mut DeviceState,
-        host: &mut M,
-        mapping_id: u32,
-        target: &crate::runtime::resident_target::ResidentTarget,
-        width: u32,
-        height: u32,
-    ) -> bool {
-        let Some(t) = target.get::<crate::backend::metal::resident::MetalSurfaceTarget>() else {
-            return false;
-        };
-        draw::metal::store_surface_from_resident(state, host, mapping_id, &t.0, width, height)
-    }
-
     /// What a broken chain's last good record left in the retained target of
     /// colour 0 (see `resident::take_chain`), so the exec loop can land it.
     fn read_abandoned_chain_rgba(

@@ -465,8 +465,6 @@ pub fn read_published_rgba8(key: &ResidentColorKey, content_gen: u64) -> Option<
     let stride = (key.width as usize).checked_mul(RGBA8_BPP as usize)?;
     let need = stride.checked_mul(key.height as usize)?;
     let texture = borrow_published(key, content_gen)?;
-    // A pass into it may still be encoding or running (render.rs PENDING/OPEN).
-    crate::backend::metal::render::wait_pending();
     // Priced, because `getBytes:` on a tiled texture is not a memcpy — it
     // linearizes — and this readback replaced a `copy_from_slice` of a host
     // `Vec` for two callers that run about once a frame each. A rail that spends
@@ -588,67 +586,6 @@ pub fn take_chain(key: &ResidentColorKey) -> Option<(Texture, ChainArea)> {
 /// it is no longer registered.
 pub fn mark_chain(key: &ResidentColorKey, area: ChainArea) -> bool {
     REGISTRY.lock().mark_chain(key, area)
-}
-
-/// The retained texture for `key` whatever it holds, for paying a deferred
-/// writeback: the ledger names the target, and the newest pixels in it are the
-/// frame owed (a later Store would have re-armed the same debt).
-pub fn peek(key: &ResidentColorKey) -> Option<Texture> {
-    let registry = REGISTRY.lock();
-    registry
-        .entries
-        .iter()
-        .find(|e| e.key == *key)
-        .map(|e| e.payload.clone())
-}
-
-/// This rail's name for a surface resident, carried by the writeback ledger
-/// from the Store that armed a debt to the payment (runtime/resident_target.rs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MetalSurfaceTarget(pub ResidentColorKey);
-
-impl crate::runtime::resident_target::RailTarget for MetalSurfaceTarget {
-    fn same_target(&self, other: &dyn crate::runtime::resident_target::RailTarget) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .is_some_and(|o| o == self)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-/// The whole of `key`'s retained texture as tight RGBA8, after every pass that
-/// may still be writing it has completed.
-pub fn read_rgba8(key: &ResidentColorKey) -> Option<Vec<u8>> {
-    use crate::protocol::pixel_format::RGBA8_BPP;
-    if key.pixel_format != 0 || key.width == 0 || key.height == 0 {
-        return None;
-    }
-    let stride = (key.width as usize).checked_mul(RGBA8_BPP as usize)?;
-    let need = stride.checked_mul(key.height as usize)?;
-    let texture = peek(key)?;
-    crate::backend::metal::render::wait_pending();
-    let mut rgba = vec![0u8; need];
-    // SAFETY: wait_pending() above completed every pass this rail submitted.
-    if let Some(linear) =
-        unsafe { raw_metal::linear_pixels(&texture, stride as u64, u64::from(key.height)) }
-    {
-        rgba.copy_from_slice(linear);
-    } else {
-        let region = metal::MTLRegion {
-            origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
-            size: metal::MTLSize {
-                width: u64::from(key.width),
-                height: u64::from(key.height),
-                depth: 1,
-            },
-        };
-        texture.get_bytes(rgba.as_mut_ptr() as *mut _, stride as u64, region, 0);
-    }
-    Some(rgba)
 }
 
 /// A chain's intermediate output for `key`, as tight RGBA8, for the exec loop
