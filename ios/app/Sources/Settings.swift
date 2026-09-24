@@ -153,6 +153,13 @@ final class Settings: ObservableObject {
     @AppStorage("guestAudio") var guestAudio: Bool = false {
         willSet { objectWillChange.send() }
     }
+    /// macOS guest: pointer authentication as an identity (ORCHARD_PAC_IDENTITY
+    /// in target/arm/tcg/translate-a64.c). The guest still sees PAC, but no
+    /// signature is computed or checked, which the emulated cores spent 10-15%
+    /// of their time on. On while it is being tried; off is the exact PAC.
+    @AppStorage("fastPAC") var fastPAC: Bool = true {
+        willSet { objectWillChange.send() }
+    }
     /// Whether the guest's vibration is played on the phone's taptic engine.
     /// On by default: without guest audio there is no actuator to follow, and
     /// where the device has no taptic engine nothing starts at all.
@@ -259,6 +266,7 @@ final class Settings: ObservableObject {
         // device tree nodes cost boot time and idle CPU, so a machine started without sound carries none
         // of them.
         if guestAudio, !VMConfig.macGuest { env["ORCHARD_AUDIO"] = "1" }
+        if fastPAC, VMConfig.macGuest { env["ORCHARD_PAC_IDENTITY"] = "1" }
         if let lines = Int(guestResolution.dropFirst("screen".count)),
            guestResolution.hasPrefix("screen") {
             let size = Settings.screenShaped(lines: lines)
@@ -771,6 +779,13 @@ private struct MachineSettings: View {
                     Text(L("Звук"))
                 } footer: {
                     Text(L("Звуковая карта virtio-sound, звук идёт на телефон своей дорожкой и не глушит музыку, которая уже играет. Пока опыт: если в госте нет устройства вывода в «Настройки → Звук», значит, его драйвер карту не принял. Применяется при запуске машины."))
+                }
+                Section {
+                    Toggle(L("Быстрая проверка указателей (опыт)"), isOn: $settings.fastPAC)
+                } header: {
+                    Text(L("Процессор"))
+                } footer: {
+                    Text(L("macOS подписывает указатели (PAC), и эмулятор считал каждую подпись, это 10–15% его работы. С этим переключателем гость по-прежнему видит PAC, но подписи не считаются и проверки всегда проходят. Если macOS перестанет загружаться, выключите. Применяется при запуске машины."))
                 }
             }
 

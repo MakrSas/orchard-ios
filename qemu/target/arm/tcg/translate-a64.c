@@ -1943,6 +1943,28 @@ static bool trans_RET(DisasContext *s, arg_r *a)
     return true;
 }
 
+/*
+ * ORCHARD_PAC_IDENTITY=1: the guest keeps pointer authentication as far as it
+ * can see (ID registers, keys, SCTLR enables), but signing leaves a pointer
+ * as it is and authenticating always succeeds, so no PAC or AUT instruction
+ * generates any code: the same as QEMU already does when the guest disables
+ * PAC, applied while it is on. Every pointer is then signed the same way, by
+ * not being signed, so a guest only ever compares like with like. PACGA stays
+ * real (XNU's JOP hash of thread state is built from it), and so do XPACI and
+ * XPACD, which on an unsigned pointer change nothing anyway. Under TCG the PAC
+ * helpers were 10-15% of the time on a macOS guest.
+ */
+static bool pac_identity(void)
+{
+    static int on = -1;
+
+    if (unlikely(on < 0)) {
+        const char *e = getenv("ORCHARD_PAC_IDENTITY");
+        on = e && *e == '1';
+    }
+    return on;
+}
+
 static TCGv_i64 auth_branch_target(DisasContext *s, TCGv_i64 dst,
                                    TCGv_i64 modifier, bool use_key_a)
 {
@@ -1952,7 +1974,7 @@ static TCGv_i64 auth_branch_target(DisasContext *s, TCGv_i64 dst,
      * just the destination dst, or that value with the pauth check
      * done and the code removed from the high bits.
      */
-    if (!s->pauth_active) {
+    if (!s->pac_emit) {
         return dst;
     }
 
@@ -2217,7 +2239,7 @@ static bool trans_XPACLRI(DisasContext *s, arg_XPACLRI *a)
 
 static bool trans_PACIA1716(DisasContext *s, arg_PACIA1716 *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_pacia(cpu_X[17], tcg_env, cpu_X[17], cpu_X[16]);
     }
     return true;
@@ -2225,7 +2247,7 @@ static bool trans_PACIA1716(DisasContext *s, arg_PACIA1716 *a)
 
 static bool trans_PACIB1716(DisasContext *s, arg_PACIB1716 *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_pacib(cpu_X[17], tcg_env, cpu_X[17], cpu_X[16]);
     }
     return true;
@@ -2233,7 +2255,7 @@ static bool trans_PACIB1716(DisasContext *s, arg_PACIB1716 *a)
 
 static bool trans_AUTIA1716(DisasContext *s, arg_AUTIA1716 *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_autia(cpu_X[17], tcg_env, cpu_X[17], cpu_X[16]);
     }
     return true;
@@ -2241,7 +2263,7 @@ static bool trans_AUTIA1716(DisasContext *s, arg_AUTIA1716 *a)
 
 static bool trans_AUTIB1716(DisasContext *s, arg_AUTIB1716 *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_autib(cpu_X[17], tcg_env, cpu_X[17], cpu_X[16]);
     }
     return true;
@@ -2277,7 +2299,7 @@ static bool trans_GCSB(DisasContext *s, arg_GCSB *a)
 
 static bool trans_PACIAZ(DisasContext *s, arg_PACIAZ *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_pacia(cpu_X[30], tcg_env, cpu_X[30], tcg_constant_i64(0));
     }
     return true;
@@ -2285,7 +2307,7 @@ static bool trans_PACIAZ(DisasContext *s, arg_PACIAZ *a)
 
 static bool trans_PACIASP(DisasContext *s, arg_PACIASP *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_pacia(cpu_X[30], tcg_env, cpu_X[30], cpu_X[31]);
     }
     return true;
@@ -2293,7 +2315,7 @@ static bool trans_PACIASP(DisasContext *s, arg_PACIASP *a)
 
 static bool trans_PACIBZ(DisasContext *s, arg_PACIBZ *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_pacib(cpu_X[30], tcg_env, cpu_X[30], tcg_constant_i64(0));
     }
     return true;
@@ -2301,7 +2323,7 @@ static bool trans_PACIBZ(DisasContext *s, arg_PACIBZ *a)
 
 static bool trans_PACIBSP(DisasContext *s, arg_PACIBSP *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_pacib(cpu_X[30], tcg_env, cpu_X[30], cpu_X[31]);
     }
     return true;
@@ -2309,7 +2331,7 @@ static bool trans_PACIBSP(DisasContext *s, arg_PACIBSP *a)
 
 static bool trans_AUTIAZ(DisasContext *s, arg_AUTIAZ *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_autia(cpu_X[30], tcg_env, cpu_X[30], tcg_constant_i64(0));
     }
     return true;
@@ -2317,7 +2339,7 @@ static bool trans_AUTIAZ(DisasContext *s, arg_AUTIAZ *a)
 
 static bool trans_AUTIASP(DisasContext *s, arg_AUTIASP *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_autia(cpu_X[30], tcg_env, cpu_X[30], cpu_X[31]);
     }
     return true;
@@ -2325,7 +2347,7 @@ static bool trans_AUTIASP(DisasContext *s, arg_AUTIASP *a)
 
 static bool trans_AUTIBZ(DisasContext *s, arg_AUTIBZ *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_autib(cpu_X[30], tcg_env, cpu_X[30], tcg_constant_i64(0));
     }
     return true;
@@ -2333,7 +2355,7 @@ static bool trans_AUTIBZ(DisasContext *s, arg_AUTIBZ *a)
 
 static bool trans_AUTIBSP(DisasContext *s, arg_AUTIBSP *a)
 {
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         gen_helper_autib(cpu_X[30], tcg_env, cpu_X[30], cpu_X[31]);
     }
     return true;
@@ -4347,7 +4369,7 @@ static bool trans_LDRA(DisasContext *s, arg_LDRA *a)
     }
     dirty_addr = read_cpu_reg_sp(s, a->rn, 1);
 
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         if (!a->m) {
             gen_helper_autda_combined(dirty_addr, tcg_env, dirty_addr,
                                       tcg_constant_i64(0));
@@ -9082,7 +9104,7 @@ static bool gen_pacaut(DisasContext *s, arg_pacaut *a, NeonGenTwo64OpEnvFn fn)
     } else {
         tcg_rn = cpu_reg_sp(s, a->rn);
     }
-    if (s->pauth_active) {
+    if (s->pac_emit) {
         tcg_rd = cpu_reg(s, a->rd);
         fn(tcg_rd, tcg_env, tcg_rd, tcg_rn);
     }
@@ -11039,6 +11061,7 @@ static void aarch64_tr_init_disas_context(DisasContextBase *dcbase,
     dc->max_svl = arm_cpu->sme_max_vq * 16;
     dc->max_any_vl = MAX(dc->max_svl, arm_cpu->sve_max_vq * 16);
     dc->pauth_active = EX_TBFLAG_A64(tb_flags, PAUTH_ACTIVE);
+    dc->pac_emit = dc->pauth_active && !pac_identity();
     dc->bt = EX_TBFLAG_A64(tb_flags, BT);
     dc->btype = EX_TBFLAG_A64(tb_flags, BTYPE);
     dc->unpriv = EX_TBFLAG_A64(tb_flags, UNPRIV);

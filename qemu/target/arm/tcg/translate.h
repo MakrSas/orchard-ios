@@ -141,6 +141,8 @@ typedef struct DisasContext {
     bool unpriv;
     /* True if v8.3-PAuth is active.  */
     bool pauth_active;
+    /* pauth_active, unless ORCHARD_PAC_IDENTITY: emit PAC/AUT at all. */
+    bool pac_emit;
     /* True if v8.5-MTE access to tags is enabled; index with is_unpriv.  */
     bool ata[2];
     /* True if v8.5-MTE tag checks affect the PE; index with is_unpriv.  */
