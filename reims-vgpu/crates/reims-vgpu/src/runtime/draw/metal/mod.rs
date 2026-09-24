@@ -75,7 +75,8 @@ fn plan_resident_target<M: HostMemory + HostOps>(
     c: &ColorRtRequest,
     width: u32,
     height: u32,
-) -> ResidentPlan {
+    chain: bool,
+) -> Option<ResidentPlan> {
     use crate::backend::metal::resident::{self, ResidentColorKey};
     use crate::runtime::draw::NoPublishedFrame;
 
@@ -101,6 +102,18 @@ fn plan_resident_target<M: HostMemory + HostOps>(
             0
         }
     };
+    // Records 2+ of a chain whose previous record left its output in the
+    // target: that output is this pass's prior content, whatever the cache says.
+    if chain {
+        let texture = resident::take_chain(&key)?;
+        crate::runtime::drain::note_store_route("metal_resident_chain");
+        return Some(ResidentPlan {
+            key,
+            texture: Some(texture),
+            holds_prior: true,
+            asked_generation: generation,
+        });
+    }
     let taken = resident::take(&key, generation);
     let holds_prior = taken.as_ref().is_some_and(|(_, current)| *current);
     crate::runtime::drain::note_store_route(match (&taken, holds_prior) {
@@ -108,12 +121,19 @@ fn plan_resident_target<M: HostMemory + HostOps>(
         (Some(_), true) => "metal_resident_holds_prior",
         (Some(_), false) => "metal_resident_allocation_only",
     });
-    ResidentPlan {
+    Some(ResidentPlan {
         key,
         texture: taken.map(|(texture, _)| texture),
         holds_prior,
         asked_generation: generation,
-    }
+    })
+}
+
+/// Whether multi-draw chains go through the CPU as they used to
+/// (ORCHARD_METAL_CPU_CHAIN=1) instead of staying on the GPU.
+fn metal_cpu_chain() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("ORCHARD_METAL_CPU_CHAIN").is_ok_and(|v| v == "1"))
 }
 
 /// Give the retained target back its claim to be the surface, if — and only if
@@ -932,9 +952,18 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
     // at 4.79 ms a draw — the largest bar on the rail. They are counters beside
     // the bar rather than a finer cut of it, so the bar keeps comparing across
     // boots; see [`chain_phase::CostSpan`].
+    // A chain's intermediate record whose every target is retained keeps its
+    // output on the GPU for the next record (`resident::take_chain`): nothing
+    // to read back, so no buffers to read it into. ORCHARD_METAL_CPU_CHAIN=1
+    // goes back to reading each record back and re-uploading it.
+    let resident_chain = !writeback_guest
+        && color_list.iter().all(|c| c.mapping_id != 0)
+        && !metal_cpu_chain();
     let mut color_outs: Vec<Vec<u8>> = {
         let _outs = chain_phase::CostSpan::new("metal_seed_outs_us");
-        (0..color_list.len()).map(|_| vec![0u8; need]).collect()
+        (0..color_list.len())
+            .map(|_| if resident_chain { Vec::new() } else { vec![0u8; need] })
+            .collect()
     };
 
     // For indexed draws, pass index_count as vertex_count for the early gate.
@@ -970,14 +999,23 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
             // target is what makes the *next* pass's Load free. The generation
             // is read whatever the load action, because it is also what the
             // Store publishes against.
-            resident_plan[i] = Some(plan_resident_target(
+            resident_plan[i] = plan_resident_target(
                 state,
                 host,
                 req.task_id,
                 c,
                 width,
                 height,
-            ));
+                req.chain_from_resident,
+            );
+            if resident_plan[i].is_none() {
+                // The previous record's output is gone (evicted, or taken by
+                // another pass): there is no prior content to draw onto.
+                return (
+                    EncodeStatus::MetalFailed("metal_chain_resident_missing"),
+                    None,
+                );
+            }
             if c.load_action != MTL_LOAD_ACTION_LOAD || color_seeds[i].is_some() {
                 continue;
             }
@@ -1179,6 +1217,20 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
     // or normal-texture GVA — archive write_mapper_ref_texture_rgba / write_gva_rgba).
     // Multi-draw intermediate records skip guest store (archive one writeback).
     let mut any_write = false;
+    if resident_chain {
+        let mut kept = true;
+        for plan in resident_plan.iter().flatten() {
+            kept &= crate::backend::metal::resident::mark_chain(&plan.key);
+        }
+        if kept {
+            req.chain_resident_established = true;
+            return (EncodeStatus::Ok, None);
+        }
+        return (
+            EncodeStatus::MetalFailed("metal_chain_resident_missing"),
+            None,
+        );
+    }
     if !writeback_guest {
         // Still log + early paint latch only when storing; chain returns RGBA.
         // Moved out rather than cloned: `color_outs` is this call's own storage

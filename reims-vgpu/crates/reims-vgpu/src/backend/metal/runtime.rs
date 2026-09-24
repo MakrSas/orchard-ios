@@ -118,6 +118,27 @@ fn no_copy_buffer_length_status(requested_len: usize, actual_len: u64) -> Status
     }
 }
 
+thread_local! {
+    static FORCE_COPY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While alive, [`new_buffer_from_host`] on this thread always copies: for a
+/// pass whose command buffer is not waited for, which the host bytes would
+/// not outlive.
+pub struct ForceCopy(bool);
+
+impl ForceCopy {
+    pub fn new(on: bool) -> Self {
+        Self(FORCE_COPY.with(|f| f.replace(on)))
+    }
+}
+
+impl Drop for ForceCopy {
+    fn drop(&mut self) {
+        FORCE_COPY.with(|f| f.set(self.0));
+    }
+}
+
 /// Prefer no-copy when host pointer+length are page-aligned (Metal contract).
 /// Fall back to a copy otherwise. Caller owns host bytes for command-buffer lifetime.
 pub fn new_buffer_from_host(device: &Device, data: *const u8, len: usize) -> Option<Buffer> {
@@ -126,7 +147,11 @@ pub fn new_buffer_from_host(device: &Device, data: *const u8, len: usize) -> Opt
     }
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
     let addr = data as usize;
-    if page != 0 && addr.is_multiple_of(page) && len.is_multiple_of(page) {
+    if !FORCE_COPY.with(|f| f.get())
+        && page != 0
+        && addr.is_multiple_of(page)
+        && len.is_multiple_of(page)
+    {
         // A nil here is the device refusing the allocation, and it arrives as
         // `None` rather than as a `Buffer`. This used to read
         // `device.new_buffer_with_bytes_no_copy(..)`, whose return type is

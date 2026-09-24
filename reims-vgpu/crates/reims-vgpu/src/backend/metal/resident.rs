@@ -152,6 +152,10 @@ struct Slot<T> {
     /// does not issue 0. A target is registered at 0 and only leaves that state
     /// when a Store has published its readback.
     content_gen: u64,
+    /// The payload holds the output of a multi-draw chain's intermediate
+    /// record, which stored nothing to the guest: the next record of the same
+    /// chain loads from it ([`take_chain`]). Any other taker clears it.
+    chain: bool,
     /// Use order, for eviction. Not a timestamp: a counter cannot go backwards
     /// and needs no clock.
     used: u64,
@@ -192,7 +196,42 @@ impl<T: Clone> Registry<T> {
         entry.used = now;
         let holds_prior = content_gen != 0 && entry.content_gen == content_gen;
         entry.content_gen = 0;
+        entry.chain = false;
         Some((entry.payload.clone(), holds_prior))
+    }
+
+    /// The payload for `key` only if it holds a chain's intermediate output.
+    fn take_chain(&mut self, key: &ResidentColorKey) -> Option<T> {
+        let now = self.tick();
+        let idx = self.position(key)?;
+        let entry = &mut self.entries[idx];
+        if !entry.chain {
+            return None;
+        }
+        entry.used = now;
+        entry.chain = false;
+        entry.content_gen = 0;
+        Some(entry.payload.clone())
+    }
+
+    fn mark_chain(&mut self, key: &ResidentColorKey) -> bool {
+        match self.position(key) {
+            Some(idx) => {
+                self.entries[idx].chain = true;
+                self.entries[idx].content_gen = 0;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The payload for `key` if it holds a chain's intermediate output, leaving
+    /// it so.
+    fn peek_chain(&self, key: &ResidentColorKey) -> Option<T> {
+        self.entries
+            .iter()
+            .find(|e| e.key == *key && e.chain)
+            .map(|e| e.payload.clone())
     }
 
     /// The payload for `key` **only if** its pixels are the frame published at
@@ -228,6 +267,7 @@ impl<T: Clone> Registry<T> {
             payload,
             bytes,
             content_gen: 0,
+            chain: false,
             used: now,
         });
         self.bytes = self.bytes.saturating_add(bytes);
@@ -481,6 +521,58 @@ fn linear_target(
         "metal_resident_tiled"
     });
     texture
+}
+
+/// The retained texture for `key`, if the previous record of this multi-draw
+/// chain left its output in it (see [`mark_chain`]).
+///
+/// The chain rail on Metal: a chain's intermediate records store nothing to
+/// the guest, so their output never needed to leave the GPU, yet each used to
+/// be read back whole and uploaded whole into the same texture for the next
+/// record — on a macOS guest dragging a window, some 2 MB each way for most of
+/// ~750 draws a second. `None` (the entry was evicted or taken by someone
+/// else) makes the caller refuse the record, and the exec loop then lands
+/// what it can through `read_chain_rgba8`.
+pub fn take_chain(key: &ResidentColorKey) -> Option<Texture> {
+    REGISTRY.lock().take_chain(key)
+}
+
+/// Mark the retained texture for `key` as holding a chain's intermediate
+/// output. False when it is no longer registered.
+pub fn mark_chain(key: &ResidentColorKey) -> bool {
+    REGISTRY.lock().mark_chain(key)
+}
+
+/// A chain's intermediate output for `key`, as tight RGBA8, for the exec loop
+/// landing an abandoned chain.
+pub fn read_chain_rgba8(key: &ResidentColorKey) -> Option<Vec<u8>> {
+    use crate::protocol::pixel_format::RGBA8_BPP;
+    if key.pixel_format != 0 || key.width == 0 || key.height == 0 {
+        return None;
+    }
+    let stride = (key.width as usize).checked_mul(RGBA8_BPP as usize)?;
+    let need = stride.checked_mul(key.height as usize)?;
+    let texture = REGISTRY.lock().peek_chain(key)?;
+    crate::backend::metal::render::wait_pending();
+    let mut rgba = vec![0u8; need];
+    // SAFETY: wait_pending() above completed every render this rail committed
+    // without waiting, and the slice does not outlive `texture`.
+    if let Some(linear) =
+        unsafe { raw_metal::linear_pixels(&texture, stride as u64, u64::from(key.height)) }
+    {
+        rgba.copy_from_slice(linear);
+    } else {
+        let region = metal::MTLRegion {
+            origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            size: metal::MTLSize {
+                width: u64::from(key.width),
+                height: u64::from(key.height),
+                depth: 1,
+            },
+        };
+        texture.get_bytes(rgba.as_mut_ptr() as *mut _, stride as u64, region, 0);
+    }
+    Some(rgba)
 }
 
 /// Record that the retained texture for `key` now holds exactly the surface

@@ -1755,6 +1755,22 @@ mod attachment_decline_tests {
     }
 }
 
+/// The last command buffer [`render_core_mrt`] committed without waiting for,
+/// if any: a multi-draw chain's intermediate record, whose output stays on the
+/// GPU for the next record (see `resident::take_chain`). Command buffers on one
+/// queue run in order and the chain's targets are tracked resources, so the
+/// record that finally waits waits for these as well; anything that touches
+/// such a target from the CPU first calls [`wait_pending`].
+static PENDING: parking_lot::Mutex<Option<CommandBuffer>> = parking_lot::Mutex::new(None);
+
+/// Wait for the command buffer [`render_core_mrt`] last left running, if any.
+pub fn wait_pending() {
+    let pending = PENDING.lock().take();
+    if let Some(command_buffer) = pending {
+        command_buffer.wait_until_completed();
+    }
+}
+
 /// Multi-render-target encode: one Metal pass with color attachments at given slots.
 ///
 /// # This encodes, submits and **blocks**, once per draw
@@ -1871,6 +1887,21 @@ pub fn render_core_mrt(
     err: ErrOut<'_>,
 ) -> Status {
     use crate::backend::metal::constants::REIMS_VGPU_METAL_MAX_COLOR_RTS;
+    // Nothing to read back when every colour target is retained and none asks
+    // for its pixels, no query is armed and no depth or stencil is stored: a
+    // chain's intermediate record. Its command buffer is left running, and the
+    // next record, queued behind it, loads what it drew. Buffers made over host
+    // memory would then outlive the memory, so this pass copies them instead.
+    let reads_back = colors.iter().any(|c| {
+        c.retained.is_none() || c.out_rgba8.as_ref().is_some_and(|o| !o.is_empty())
+    }) || visibility.is_some()
+        || depth_attachment
+            .as_ref()
+            .is_some_and(|d| d.store_action == REIMS_VGPU_MTL_STORE_ACTION_STORE)
+        || stencil_attachment
+            .as_ref()
+            .is_some_and(|s| s.store_action == REIMS_VGPU_MTL_STORE_ACTION_STORE);
+    let _copy_host_buffers = crate::backend::metal::runtime::ForceCopy::new(!reads_back);
     // Widened here rather than at the call, so the `as usize` on each of these
     // happens once and the caller passes the decoded draw whole. These were five
     // positional parameters, four of them `usize`; the sole caller reached them
@@ -2146,6 +2177,8 @@ pub fn render_core_mrt(
         // which is the copy this rail exists to stop making.
         let _span_seed = crate::runtime::chain_phase::CostSpan::new("metal_rt_seed_us");
         if let Some(seed) = c.seed_rgba8.filter(|_| !holds_prior) {
+            // The CPU writes this texture: nothing still rendering may touch it.
+            wait_pending();
             let region = MTLRegion {
                 origin: MTLOrigin { x: 0, y: 0, z: 0 },
                 size: MTLSize {
@@ -2560,7 +2593,17 @@ pub fn render_core_mrt(
     // could do faster.
     let span_commit = crate::runtime::chain_phase::CostSpan::new("metal_commit_us");
     command_buffer.commit();
+    if !reads_back {
+        *PENDING.lock() = Some(command_buffer.clone());
+        drop(span_commit);
+        crate::runtime::drain::note_store_route("metal_chain_record_unwaited");
+        clear_err(err);
+        let _ = retained_buf;
+        return Status::OK;
+    }
     command_buffer.wait_until_completed();
+    // Queued ahead of this one, so already done; this only drops the handle.
+    wait_pending();
     drop(span_commit);
     if command_buffer.status() == MTLCommandBufferStatus::Error {
         let detail = command_buffer_error_description(&command_buffer);

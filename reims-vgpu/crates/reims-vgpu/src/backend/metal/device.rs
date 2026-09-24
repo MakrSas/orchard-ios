@@ -120,6 +120,26 @@ impl Backend for MetalBackend {
         draw::metal::encode_draw_chain(state, host, req, writeback_guest, force_full_store)
     }
 
+    /// What a broken chain's last good record left in the retained target of
+    /// colour 0 (see `resident::take_chain`), so the exec loop can land it.
+    fn read_abandoned_chain_rgba(
+        &self,
+        _state: &DeviceState,
+        req: &DrawEncodeRequest,
+    ) -> Option<Vec<u8>> {
+        let c = req.colors.first()?;
+        if c.mapping_id == 0 {
+            return None;
+        }
+        crate::backend::metal::resident::read_chain_rgba8(
+            &crate::backend::metal::resident::ResidentColorKey::for_surface(
+                c.mapping_id,
+                c.width,
+                c.height,
+            ),
+        )
+    }
+
     fn execute_dispatch<M: HostMemory + HostOps>(
         &self,
         state: &mut DeviceState,
