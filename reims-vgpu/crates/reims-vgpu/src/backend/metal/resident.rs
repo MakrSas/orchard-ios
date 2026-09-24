@@ -133,6 +133,45 @@ impl ResidentColorKey {
     }
 }
 
+/// The part of a chain's target its records may have changed: the union of
+/// their scissor rects, or all of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainArea {
+    pub full: bool,
+    pub x0: u32,
+    pub y0: u32,
+    pub x1: u32,
+    pub y1: u32,
+}
+
+impl ChainArea {
+    pub const EMPTY: Self = Self { full: false, x0: 0, y0: 0, x1: 0, y1: 0 };
+    pub const FULL: Self = Self { full: true, x0: 0, y0: 0, x1: 0, y1: 0 };
+
+    pub fn is_empty(&self) -> bool {
+        !self.full && (self.x0 >= self.x1 || self.y0 >= self.y1)
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        if self.full || other.full {
+            return Self::FULL;
+        }
+        if self.is_empty() {
+            return other;
+        }
+        if other.is_empty() {
+            return self;
+        }
+        Self {
+            full: false,
+            x0: self.x0.min(other.x0),
+            y0: self.y0.min(other.y0),
+            x1: self.x1.max(other.x1),
+            y1: self.y1.max(other.y1),
+        }
+    }
+}
+
 /// One retained target: this rail's payload plus the bookkeeping that decides
 /// whether it may be loaded from and when it is dropped.
 ///
@@ -156,6 +195,8 @@ struct Slot<T> {
     /// record, which stored nothing to the guest: the next record of the same
     /// chain loads from it ([`take_chain`]). Any other taker clears it.
     chain: bool,
+    /// What the chain's records so far may have drawn over, when `chain`.
+    chain_area: ChainArea,
     /// Use order, for eviction. Not a timestamp: a counter cannot go backwards
     /// and needs no clock.
     used: u64,
@@ -200,8 +241,9 @@ impl<T: Clone> Registry<T> {
         Some((entry.payload.clone(), holds_prior))
     }
 
-    /// The payload for `key` only if it holds a chain's intermediate output.
-    fn take_chain(&mut self, key: &ResidentColorKey) -> Option<T> {
+    /// The payload for `key` only if it holds a chain's intermediate output,
+    /// with the area the chain has drawn over so far.
+    fn take_chain(&mut self, key: &ResidentColorKey) -> Option<(T, ChainArea)> {
         let now = self.tick();
         let idx = self.position(key)?;
         let entry = &mut self.entries[idx];
@@ -211,13 +253,14 @@ impl<T: Clone> Registry<T> {
         entry.used = now;
         entry.chain = false;
         entry.content_gen = 0;
-        Some(entry.payload.clone())
+        Some((entry.payload.clone(), entry.chain_area))
     }
 
-    fn mark_chain(&mut self, key: &ResidentColorKey) -> bool {
+    fn mark_chain(&mut self, key: &ResidentColorKey, area: ChainArea) -> bool {
         match self.position(key) {
             Some(idx) => {
                 self.entries[idx].chain = true;
+                self.entries[idx].chain_area = area;
                 self.entries[idx].content_gen = 0;
                 true
             }
@@ -268,6 +311,7 @@ impl<T: Clone> Registry<T> {
             bytes,
             content_gen: 0,
             chain: false,
+            chain_area: ChainArea::FULL,
             used: now,
         });
         self.bytes = self.bytes.saturating_add(bytes);
@@ -533,14 +577,15 @@ fn linear_target(
 /// ~750 draws a second. `None` (the entry was evicted or taken by someone
 /// else) makes the caller refuse the record, and the exec loop then lands
 /// what it can through `read_chain_rgba8`.
-pub fn take_chain(key: &ResidentColorKey) -> Option<Texture> {
+pub fn take_chain(key: &ResidentColorKey) -> Option<(Texture, ChainArea)> {
     REGISTRY.lock().take_chain(key)
 }
 
 /// Mark the retained texture for `key` as holding a chain's intermediate
-/// output. False when it is no longer registered.
-pub fn mark_chain(key: &ResidentColorKey) -> bool {
-    REGISTRY.lock().mark_chain(key)
+/// output, which may differ from the guest's pages within `area`. False when
+/// it is no longer registered.
+pub fn mark_chain(key: &ResidentColorKey, area: ChainArea) -> bool {
+    REGISTRY.lock().mark_chain(key, area)
 }
 
 /// A chain's intermediate output for `key`, as tight RGBA8, for the exec loop

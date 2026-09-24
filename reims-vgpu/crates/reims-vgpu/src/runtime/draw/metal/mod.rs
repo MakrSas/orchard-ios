@@ -56,6 +56,8 @@ struct ResidentPlan {
     /// `0` when there was no entry to compare against, which a refreshing
     /// writeback then differs from as well.
     asked_generation: u64,
+    /// Records 2+ of a chain: what the chain's earlier records drew over.
+    chain_area: crate::backend::metal::resident::ChainArea,
 }
 
 /// Decide how this attachment's render target is obtained and retained.
@@ -105,13 +107,14 @@ fn plan_resident_target<M: HostMemory + HostOps>(
     // Records 2+ of a chain whose previous record left its output in the
     // target: that output is this pass's prior content, whatever the cache says.
     if chain {
-        let texture = resident::take_chain(&key)?;
+        let (texture, chain_area) = resident::take_chain(&key)?;
         crate::runtime::drain::note_store_route("metal_resident_chain");
         return Some(ResidentPlan {
             key,
             texture: Some(texture),
             holds_prior: true,
             asked_generation: generation,
+            chain_area,
         });
     }
     let taken = resident::take(&key, generation);
@@ -126,6 +129,7 @@ fn plan_resident_target<M: HostMemory + HostOps>(
         texture: taken.map(|(texture, _)| texture),
         holds_prior,
         asked_generation: generation,
+        chain_area: resident::ChainArea::FULL,
     })
 }
 
@@ -1045,6 +1049,44 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
         }
     }
 
+    // What each retained target differs from the guest's pages in once this
+    // record has drawn: what the chain drew before, plus this record's scissor.
+    // A chain's final Store writes back only that (see the Store below), instead
+    // of the whole attachment. A first record that Loads the guest's own content
+    // starts from nothing drawn; Clear or an unseeded Load changes everything.
+    let chain_areas: Vec<crate::backend::metal::resident::ChainArea> = {
+        use crate::backend::metal::resident::ChainArea;
+        let this_record = match req.scissors.as_slice() {
+            [r] => ChainArea {
+                full: false,
+                x0: r.x.min(width),
+                y0: r.y.min(height),
+                x1: r.x.saturating_add(r.width).min(width),
+                y1: r.y.saturating_add(r.height).min(height),
+            },
+            _ => ChainArea::FULL,
+        };
+        color_list
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let Some(plan) = resident_plan[i].as_ref() else {
+                    return ChainArea::FULL;
+                };
+                let before = if req.chain_from_resident {
+                    plan.chain_area
+                } else if c.load_action == MTL_LOAD_ACTION_LOAD
+                    && (color_seeds[i].is_some() || plan.holds_prior)
+                {
+                    ChainArea::EMPTY
+                } else {
+                    ChainArea::FULL
+                };
+                before.union(this_record)
+            })
+            .collect()
+    };
+
     // Build ColorRt views with raw pointers into seeds/outs (disjoint mut slices).
     chain_phase::enter(chain_phase::Phase::Assemble);
     let mut color_rts: Vec<ColorRt<'_>> = Vec::with_capacity(color_list.len());
@@ -1219,8 +1261,10 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
     let mut any_write = false;
     if resident_chain {
         let mut kept = true;
-        for plan in resident_plan.iter().flatten() {
-            kept &= crate::backend::metal::resident::mark_chain(&plan.key);
+        for (i, plan) in resident_plan.iter().enumerate() {
+            if let Some(plan) = plan {
+                kept &= crate::backend::metal::resident::mark_chain(&plan.key, chain_areas[i]);
+            }
         }
         if kept {
             req.chain_resident_established = true;
@@ -1264,11 +1308,33 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
             [r] if !r.covers(width, height) => Some(*r),
             _ => None,
         };
-        let gva_partial = seed_for_store.is_some() && store_rect.is_some();
+        let mut gva_partial = seed_for_store.is_some() && store_rect.is_some();
+        // A chain that stayed on the GPU: its target equals the guest's pages
+        // outside what its records drew over, so only that is written back, and
+        // the target then holds the whole frame again (ceded below).
+        let chain_area = chain_areas[i];
+        let chain_partial = req.chain_from_resident
+            && c.mapping_id != 0
+            && resident_plan.get(i).is_some_and(Option::is_some)
+            && !chain_area.full
+            && !chain_area.is_empty()
+            && !metal_cpu_chain();
+        let store_rect = if chain_partial {
+            gva_partial = true;
+            crate::runtime::drain::note_store_route("metal_chain_store_partial");
+            Some(crate::runtime::render_pass::ScissorRect {
+                x: chain_area.x0,
+                y: chain_area.y0,
+                width: chain_area.x1 - chain_area.x0,
+                height: chain_area.y1 - chain_area.y0,
+            })
+        } else {
+            store_rect
+        };
         let wrote = if c.mapping_id != 0 {
             if gva_partial {
                 let r = store_rect.expect("gva_partial implies exactly one narrowing rect");
-                write_mapping_rgba8_rect(
+                let wrote = write_mapping_rgba8_rect(
                     state,
                     host,
                     c.mapping_id,
@@ -1282,7 +1348,23 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
                         width: r.width,
                         height: r.height,
                     },
-                )
+                );
+                // The rect writer retires the cache entry because the texture it
+                // wrote from is not known to hold the rest of the frame. After a
+                // chain that stayed on the GPU it is: the rest is the content the
+                // chain loaded from the guest's pages. So the target keeps the
+                // frame, exactly as the full Store's RailResident publication
+                // would have left it, and the next chain loads nothing.
+                if wrote && chain_partial {
+                    crate::runtime::surface_cache::cede_surface_to_resident(
+                        state,
+                        c.mapping_id,
+                        width,
+                        height,
+                    );
+                    crate::runtime::mapper::stamp_guest_write_gen(state, host, c.mapping_id);
+                }
+                wrote
             } else {
                 // The host copy of this frame is worth its 12.6 ms a flush
                 // only when nothing else holds the frame. This rail's own
