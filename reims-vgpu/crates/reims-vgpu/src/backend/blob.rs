@@ -37,7 +37,7 @@
 
 #![cfg_attr(not(feature = "backend-metal"), allow(dead_code))]
 
-use crate::backend::hash::hash_bytes;
+
 use std::sync::Arc;
 
 /// A blob a caller is asking about, borrowed, beside the digest that buckets it.
@@ -55,10 +55,38 @@ pub struct BlobKey<'a> {
 impl<'a> BlobKey<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
         Self {
-            hash: hash_bytes(bytes),
+            hash: bucket_hash(bytes),
             bytes,
         }
     }
+}
+
+/// The digest a [`BlobKey`] buckets on: four independent lanes over 8-byte
+/// words. It decides nothing — [`BlobIdentity::is`] compares the bytes — so
+/// all it needs is to spread distinct blobs, and to be fast: the render path
+/// keys both shaders twice per draw, and [`crate::backend::hash::hash_bytes`], one byte per step
+/// through a multiply, cost some 0.1 ms a draw on an iPhone at 30 KB a blob,
+/// roughly a sixth of the whole draw.
+fn bucket_hash(bytes: &[u8]) -> u64 {
+    const K: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut lanes = [K, K.rotate_left(17), K.rotate_left(31), K.rotate_left(47)];
+    let mut chunks = bytes.chunks_exact(32);
+    for chunk in &mut chunks {
+        for (i, lane) in lanes.iter_mut().enumerate() {
+            let w = u64::from_le_bytes(chunk[i * 8..i * 8 + 8].try_into().unwrap());
+            *lane = (*lane ^ w).wrapping_mul(K).rotate_left(29);
+        }
+    }
+    let mut h = bytes.len() as u64;
+    for lane in lanes {
+        h = (h ^ lane).wrapping_mul(K).rotate_left(31);
+    }
+    for &b in chunks.remainder() {
+        h = (h ^ u64::from(b)).wrapping_mul(K);
+    }
+    h ^= h >> 29;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h ^ (h >> 32)
 }
 
 /// The retained half: a cache entry's own copy of the blob it was compiled from.

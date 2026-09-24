@@ -2312,6 +2312,9 @@ pub fn render_core_mrt(
     drop(span_pass);
 
     let span_encode = crate::runtime::chain_phase::CostSpan::new("metal_encode_us");
+    // Finer cuts of metal_encode_us, for deciding what one encoder per chain
+    // (instead of per draw) would save.
+    let span_open = crate::runtime::chain_phase::CostSpan::new("metal_enc_open_us");
     let queue = thread_queue(device);
     let Some(command_buffer) = crate::backend::metal::raw_metal::new_command_buffer(&queue) else {
         return Status::execute("metal_render_command_buffer_unavailable");
@@ -2322,6 +2325,8 @@ pub fn render_core_mrt(
     else {
         return Status::execute("metal_render_encoder_unavailable");
     };
+    drop(span_open);
+    let span_state = crate::runtime::chain_phase::CostSpan::new("metal_enc_state_us");
     encoder.set_render_pipeline_state(&pso);
     if let Some(mode) = visibility_mode {
         encoder.set_visibility_result_mode(mode, 0);
@@ -2340,6 +2345,8 @@ pub fn render_core_mrt(
     }
     apply_viewports(encoder, viewports, width, height);
     apply_scissors(encoder, scissors, width, height);
+    drop(span_state);
+    let span_bufs = crate::runtime::chain_phase::CostSpan::new("metal_enc_bufs_us");
 
     for slot in &attr_slots {
         encoder.set_vertex_buffer(slot.index, Some(&slot.buffer), 0);
@@ -2354,6 +2361,8 @@ pub fn render_core_mrt(
         encoder.end_encoding();
         return rc;
     }
+    drop(span_bufs);
+    let span_tex = crate::runtime::chain_phase::CostSpan::new("metal_enc_tex_us");
     let rc = bind_sampled_images(
         device,
         encoder,
@@ -2388,6 +2397,8 @@ pub fn render_core_mrt(
         encoder.end_encoding();
         return rc;
     }
+    drop(span_tex);
+    let span_draw = crate::runtime::chain_phase::CostSpan::new("metal_enc_draw_us");
 
     if let Some(pi) = primitive_indirect {
         let need = std::mem::size_of::<ReimsVgpuPrimitiveIndirectArguments>();
@@ -2585,6 +2596,7 @@ pub fn render_core_mrt(
     }
 
     encoder.end_encoding();
+    drop(span_draw);
     drop(span_encode);
 
     // One command buffer, one pass, one blocking round trip, per decoded draw.
