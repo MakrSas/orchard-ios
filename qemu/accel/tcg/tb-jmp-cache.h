@@ -33,9 +33,16 @@
  * An entry is live only while its 'gen' equals the cache's generation for
  * its half of the address space: 'gen' for pc with bit 63 set (the kernel's
  * half), 'gen_lo' for the rest. Flushing the whole cache is one increment of
- * each (tcg_flush_jmp_cache), which retires every entry at once, and an ASID
- * change retires the user half with one increment of 'gen_lo'. Entries that
- * are cleared one at a time still clear 'tb', as before.
+ * 'gen' and of the epoch in 'gen_lo' (tcg_flush_jmp_cache), which retires
+ * every entry at once. Entries that are cleared one at a time still clear
+ * 'tb', as before.
+ *
+ * 'gen_lo' is an epoch (high 16 bits) and the current ASID (low 16): user
+ * TBs are tagged with the process they ran in, as a real TLB tags its
+ * entries, so switching processes and back finds them still there
+ * (tb_jmp_cache_set_asid). The guest has to invalidate by TLBI whatever
+ * mapping it changes under an ASID, and every TLB flush clears the jump
+ * cache entries at the flushed addresses, of all ASIDs, or bumps the epoch.
  */
 typedef struct CPUJumpCache {
     struct rcu_head rcu;
@@ -54,6 +61,32 @@ typedef struct CPUJumpCache {
         uint32_t gen;
     } array[TB_JMP_CACHE_SIZE];
 } CPUJumpCache;
+
+/* Retire every user-half entry, of all ASIDs. True when the epoch wrapped. */
+static inline bool tb_jmp_cache_bump_lo(CPUJumpCache *jc)
+{
+    uint32_t old = qatomic_read(&jc->gen_lo), seen, new;
+
+    for (;;) {
+        new = old + 0x10000;
+        seen = qatomic_cmpxchg(&jc->gen_lo, old, new);
+        if (seen == old) {
+            return (new >> 16) == 0;
+        }
+        old = seen;
+    }
+}
+
+/* Make @asid's user-half entries the live ones. */
+static inline void tb_jmp_cache_set_asid(CPUJumpCache *jc, uint16_t asid)
+{
+    uint32_t old = qatomic_read(&jc->gen_lo), seen;
+
+    while ((seen = qatomic_cmpxchg(&jc->gen_lo, old,
+                                   (old & 0xffff0000u) | asid)) != old) {
+        old = seen;
+    }
+}
 
 /* The generation an entry for @pc must carry to be live. */
 static inline uint32_t tb_jmp_cache_gen(CPUJumpCache *jc, vaddr pc)

@@ -2898,7 +2898,8 @@ static void vmsa_ttbr_write(CPUARMState *env, const ARMCPRegInfo *ri,
             tlb_flush_low_half_by_mmuidx(CPU(cpu),
                                          ARMMMUIdxBit_E10_0 | ARMMMUIdxBit_E10_0_GCS,
                                          ARMMMUIdxBit_E10_1 | ARMMMUIdxBit_E10_1_PAN |
-                                         ARMMMUIdxBit_E10_1_GCS);
+                                         ARMMMUIdxBit_E10_1_GCS,
+                                         extract64(value, 48, 16));
         } else {
             tlb_flush(CPU(cpu));
         }

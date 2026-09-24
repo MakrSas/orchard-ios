@@ -639,7 +639,7 @@ void tcg_flush_jmp_cache(CPUState *cpu)
      */
     qatomic_inc(&jc->flushes);
     if (unlikely((qatomic_fetch_inc(&jc->gen) + 1 == 0) |
-                 (qatomic_fetch_inc(&jc->gen_lo) + 1 == 0))) {
+                 tb_jmp_cache_bump_lo(jc))) {
         for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
             qatomic_set(&jc->array[i].tb, NULL);
         }

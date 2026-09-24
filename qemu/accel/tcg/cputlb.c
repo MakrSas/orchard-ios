@@ -445,7 +445,22 @@ static bool tlb_entry_is_low_half(const CPUTLBEntry *e)
     return false;
 }
 
-void tlb_flush_low_half_by_mmuidx(CPUState *cpu, MMUIdxMap full, MMUIdxMap low)
+/*
+ * Whether the jump cache keeps each process's user TBs across switches
+ * (tb-jmp-cache.h). ORCHARD_JC_ASID_TAG=0 retires them on every switch.
+ */
+static bool jc_asid_tag(void)
+{
+    static int enabled = -1;
+
+    if (unlikely(enabled < 0)) {
+        enabled = !g_str_equal(g_getenv("ORCHARD_JC_ASID_TAG") ?: "", "0");
+    }
+    return enabled;
+}
+
+void tlb_flush_low_half_by_mmuidx(CPUState *cpu, MMUIdxMap full, MMUIdxMap low,
+                                  uint16_t asid)
 {
     int64_t now = get_clock_realtime();
     CPUJumpCache *jc = cpu->tb_jmp_cache;
@@ -486,10 +501,14 @@ void tlb_flush_low_half_by_mmuidx(CPUState *cpu, MMUIdxMap full, MMUIdxMap low)
 
     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
 
-    /* Retire the user half of the jump cache: see tb-jmp-cache.h. */
-    if (jc && unlikely(qatomic_fetch_inc(&jc->gen_lo) + 1 == 0)) {
-        for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
-            qatomic_set(&jc->array[i].tb, NULL);
+    /* Switch the user half of the jump cache: see tb-jmp-cache.h. */
+    if (jc) {
+        if (jc_asid_tag()) {
+            tb_jmp_cache_set_asid(jc, asid);
+        } else if (unlikely(tb_jmp_cache_bump_lo(jc))) {
+            for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
+                qatomic_set(&jc->array[i].tb, NULL);
+            }
         }
     }
     qatomic_set(&cpu->neg.tlb.c.part_flush_count,
