@@ -36,6 +36,7 @@ struct AttrBufferSlot {
     step_rate: u32,
     index: u64,
     buffer: Buffer,
+    offset: u64,
 }
 
 fn apply_blend(
@@ -399,7 +400,7 @@ fn find_or_add_attr_slot(
             .field("count", slots.len())
             .field("limit", REIMS_VGPU_METAL_MAX_BUFFERS));
     }
-    let buffer = match new_buffer_from_host(device, attr.data, attr.len) {
+    let (buffer, offset) = match host_buffer(device, attr.data, attr.len) {
         Some(b) => b,
         None => {
             set_err(err, "failed to create vertex attribute buffer");
@@ -417,6 +418,7 @@ fn find_or_add_attr_slot(
         step_rate,
         index,
         buffer,
+        offset,
     });
     Ok(Some(index))
 }
@@ -842,7 +844,7 @@ fn bind_storage_buffers(
                 .field("fragment", fragment_stage)
                 .field("binding", buffer.binding);
         }
-        let mtl_buffer = match new_buffer_from_host(device, buffer.data, buffer.len) {
+        let (mtl_buffer, offset) = match host_buffer(device, buffer.data, buffer.len) {
             Some(b) => b,
             None => {
                 set_err(
@@ -859,7 +861,7 @@ fn bind_storage_buffers(
             }
         };
         if fragment_stage {
-            encoder.set_fragment_buffer(buffer.binding as u64, Some(&mtl_buffer), 0);
+            encoder.set_fragment_buffer(buffer.binding as u64, Some(&mtl_buffer), offset);
         } else if buffer.has_attribute_stride != 0 {
             // `setVertexBuffer:offset:attributeStride:atIndex:` is only legal
             // where the pipeline's `MTLVertexBufferLayoutDescriptor.stride` for
@@ -889,7 +891,7 @@ fn bind_storage_buffers(
                 .field("binding", buffer.binding)
                 .field("stride", buffer.attribute_stride);
         } else {
-            encoder.set_vertex_buffer(buffer.binding as u64, Some(&mtl_buffer), 0);
+            encoder.set_vertex_buffer(buffer.binding as u64, Some(&mtl_buffer), offset);
         }
         retained.push(mtl_buffer);
     }
@@ -1761,14 +1763,85 @@ mod attachment_decline_tests {
 /// queue run in order and the chain's targets are tracked resources, so the
 /// record that finally waits waits for these as well; anything that touches
 /// such a target from the CPU first calls [`wait_pending`].
-static PENDING: parking_lot::Mutex<Option<CommandBuffer>> = parking_lot::Mutex::new(None);
+static PENDING: parking_lot::Mutex<Vec<CommandBuffer>> = parking_lot::Mutex::new(Vec::new());
 
-/// Wait for the command buffer [`render_core_mrt`] last left running, if any.
+/// Wait for every command buffer [`render_core_mrt`] left running.
 pub fn wait_pending() {
-    let pending = PENDING.lock().take();
-    if let Some(command_buffer) = pending {
+    let pending = std::mem::take(&mut *PENDING.lock());
+    for command_buffer in pending {
         command_buffer.wait_until_completed();
     }
+}
+
+/// The ring [`host_buffer`] copies draw buffers into: one shared allocation
+/// instead of a new `MTLBuffer` per buffer per draw. On a macOS guest dragging
+/// a window, those allocations and copies were 0.19 ms of a 0.7 ms draw.
+struct Ring {
+    buffer: Buffer,
+    size: u64,
+    offset: u64,
+}
+
+static RING: parking_lot::Mutex<Option<Ring>> = parking_lot::Mutex::new(None);
+const RING_SIZE: u64 = 32 << 20;
+
+thread_local! {
+    /// Whether the draw being encoded on this thread already holds ring space,
+    /// which a wrap would overwrite.
+    static RING_IN_DRAW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A GPU buffer holding a copy of `len` bytes at `data`, and the offset to
+/// bind it at. Space is reused once the ring wraps, after every command buffer
+/// that might still read it has completed ([`wait_pending`]; a waited draw has
+/// completed by definition). Large buffers, and a wrap in the middle of a draw
+/// that already took ring space, get a buffer of their own as before.
+fn host_buffer(device: &Device, data: *const u8, len: usize) -> Option<(Buffer, u64)> {
+    if data.is_null() || len == 0 {
+        return None;
+    }
+    let len64 = len as u64;
+    if len64 <= RING_SIZE / 8 {
+        let mut ring = RING.lock();
+        if ring.is_none() {
+            if let Some(buffer) = crate::backend::metal::raw_metal::new_buffer(
+                device,
+                RING_SIZE,
+                MTLResourceOptions::StorageModeShared,
+            ) {
+                *ring = Some(Ring {
+                    buffer,
+                    size: RING_SIZE,
+                    offset: 0,
+                });
+            }
+        }
+        if let Some(r) = ring.as_mut() {
+            let mut start = r.offset.div_ceil(256) * 256;
+            let mut fits = start + len64 <= r.size;
+            if !fits && !RING_IN_DRAW.with(|f| f.get()) {
+                wait_pending();
+                start = 0;
+                fits = true;
+            }
+            if fits {
+                // SAFETY: [start, start + len) lies inside the ring, and no
+                // command buffer that could read it is still running (above).
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        data,
+                        (r.buffer.contents() as *mut u8).add(start as usize),
+                        len,
+                    );
+                }
+                r.offset = start + len64;
+                RING_IN_DRAW.with(|f| f.set(true));
+                crate::runtime::drain::note_store_route("metal_ring_binds");
+                return Some((r.buffer.clone(), start));
+            }
+        }
+    }
+    new_buffer_from_host(device, data, len).map(|b| (b, 0))
 }
 
 /// Multi-render-target encode: one Metal pass with color attachments at given slots.
@@ -1902,6 +1975,7 @@ pub fn render_core_mrt(
             .as_ref()
             .is_some_and(|s| s.store_action == REIMS_VGPU_MTL_STORE_ACTION_STORE);
     let _copy_host_buffers = crate::backend::metal::runtime::ForceCopy::new(!reads_back);
+    RING_IN_DRAW.with(|f| f.set(false));
     // Widened here rather than at the call, so the `as usize` on each of these
     // happens once and the caller passes the decoded draw whole. These were five
     // positional parameters, four of them `usize`; the sole caller reached them
@@ -2349,7 +2423,7 @@ pub fn render_core_mrt(
     let span_bufs = crate::runtime::chain_phase::CostSpan::new("metal_enc_bufs_us");
 
     for slot in &attr_slots {
-        encoder.set_vertex_buffer(slot.index, Some(&slot.buffer), 0);
+        encoder.set_vertex_buffer(slot.index, Some(&slot.buffer), slot.offset);
     }
     let rc = bind_storage_buffers(device, encoder, &mut retained_buf, buffers, false, err);
     if !rc.is_ok() {
@@ -2606,7 +2680,7 @@ pub fn render_core_mrt(
     let span_commit = crate::runtime::chain_phase::CostSpan::new("metal_commit_us");
     command_buffer.commit();
     if !reads_back {
-        *PENDING.lock() = Some(command_buffer.clone());
+        PENDING.lock().push(command_buffer.clone());
         drop(span_commit);
         crate::runtime::drain::note_store_route("metal_chain_record_unwaited");
         clear_err(err);
