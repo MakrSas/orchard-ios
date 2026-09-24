@@ -28,39 +28,40 @@
 
 #ifdef CONFIG_SOFTMMU
 
-/* Only the bottom TB_JMP_PAGE_BITS of the jump cache hash bits vary for
-   addresses on the same page.  The top bits are the same.  This allows
-   TLB invalidation to quickly clear a subset of the hash table.  */
-#define TB_JMP_PAGE_BITS (TB_JMP_CACHE_BITS / 2)
+/*
+ * The cache is 32 groups of 512 slots. A page's TBs all live in one group,
+ * picked by a multiplicative hash of the page number, so a TLB flush of a
+ * page looks at 512 slots and empties only those whose pc is on that page
+ * (tb_jmp_cache_clear_page). Upstream had 64 groups of 64, took the group
+ * from a few page bits, and emptied the whole group on every page flush.
+ */
+#define TB_JMP_PAGE_BITS 9
 #define TB_JMP_PAGE_SIZE (1 << TB_JMP_PAGE_BITS)
 #define TB_JMP_ADDR_MASK (TB_JMP_PAGE_SIZE - 1)
 #define TB_JMP_PAGE_MASK (TB_JMP_CACHE_SIZE - TB_JMP_PAGE_SIZE)
 
 static inline unsigned int tb_jmp_cache_hash_page(vaddr pc)
 {
-    vaddr tmp;
-    tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
-    return (tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK;
+    uint64_t page = pc >> TARGET_PAGE_BITS;
+
+    return ((page * 0x9e3779b97f4a7c15ull)
+            >> (64 - (TB_JMP_CACHE_BITS - TB_JMP_PAGE_BITS)))
+           << TB_JMP_PAGE_BITS;
 }
 
 /*
- * The slot within the page's group of TB_JMP_PAGE_SIZE: upstream took
- * (pc ^ pc >> 8) & 63, which never sees pc bits 6 and 7, so on a 16 KiB
- * page four instructions 64 bytes apart share a slot. This folds in every
- * bit of the offset, and the TB flags too: a kernel routine run both with
- * and without PAN (copyin, copyout) is two TBs at one pc, and they no
- * longer take turns evicting each other. The page's group is unchanged, so
- * tb_jmp_cache_clear_page() still finds every entry of a page.
+ * The slot within the group folds in every bit of the offset, and the TB
+ * flags too: a kernel routine run both with and without PAN (copyin,
+ * copyout) is two TBs at one pc, and they do not take turns evicting each
+ * other.
  */
 static inline unsigned int tb_jmp_cache_hash_func(vaddr pc, uint32_t flags,
                                                   uint64_t cs_base)
 {
-    vaddr tmp;
     uint64_t f = (flags ^ cs_base) * 0x9e3779b97f4a7c15ull;
 
-    tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
-    return (((tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK)
-           | (((pc >> 2) ^ (pc >> 8) ^ (f >> 58)) & TB_JMP_ADDR_MASK));
+    return tb_jmp_cache_hash_page(pc) |
+           (((pc >> 2) ^ (pc >> 11) ^ (f >> 55)) & TB_JMP_ADDR_MASK);
 }
 
 #else

@@ -486,11 +486,10 @@ void tlb_flush_low_half_by_mmuidx(CPUState *cpu, MMUIdxMap full, MMUIdxMap low)
 
     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
 
-    if (jc) {
+    /* Retire the user half of the jump cache: see tb-jmp-cache.h. */
+    if (jc && unlikely(qatomic_fetch_inc(&jc->gen_lo) + 1 == 0)) {
         for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
-            if (!(jc->array[i].pc & (1ull << 63))) {
-                qatomic_set(&jc->array[i].tb, NULL);
-            }
+            qatomic_set(&jc->array[i].tb, NULL);
         }
     }
     qatomic_set(&cpu->neg.tlb.c.part_flush_count,
@@ -818,11 +817,22 @@ static void tlb_flush_range_by_mmuidx_async_0(CPUState *cpu,
     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
 
     /*
-     * If the length is larger than the jump cache size, then it will take
-     * longer to clear each entry individually than it will to clear it all.
+     * When clearing page by page would look at more slots than the cache
+     * has, one pass over the cache clears exactly the range instead.
      */
-    if (d.len >= (TARGET_PAGE_SIZE * TB_JMP_CACHE_SIZE)) {
-        tcg_flush_jmp_cache(cpu);
+    if (d.len / TARGET_PAGE_SIZE + 2 >= TB_JMP_CACHE_SIZE / TB_JMP_PAGE_SIZE) {
+        CPUJumpCache *jc = cpu->tb_jmp_cache;
+        vaddr mask = d.bits < 64 ? MAKE_64BIT_MASK(0, d.bits) : -1;
+        vaddr start = d.addr - TARGET_PAGE_SIZE;
+        vaddr span = d.len + TARGET_PAGE_SIZE;
+
+        if (jc) {
+            for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
+                if (((jc->array[i].pc - start) & mask) < span) {
+                    qatomic_set(&jc->array[i].tb, NULL);
+                }
+            }
+        }
         return;
     }
 

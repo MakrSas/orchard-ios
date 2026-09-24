@@ -242,7 +242,7 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
 
     tb = qatomic_read(&jc->array[hash].tb);
     if (likely(tb &&
-               jc->array[hash].gen == qatomic_read(&jc->gen) &&
+               jc->array[hash].gen == tb_jmp_cache_gen(jc, s.pc) &&
                jc->array[hash].pc == s.pc &&
                tb->cs_base == s.cs_base &&
                tb->flags == s.flags &&
@@ -251,7 +251,7 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
     }
 
     jc->misses++;
-    if (!tb || jc->array[hash].gen != qatomic_read(&jc->gen)) {
+    if (!tb || jc->array[hash].gen != tb_jmp_cache_gen(jc, s.pc)) {
         jc->miss_empty++;
     } else if (jc->array[hash].pc != s.pc) {
         jc->miss_other_pc++;
@@ -264,7 +264,7 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
     }
 
     jc->array[hash].pc = s.pc;
-    jc->array[hash].gen = qatomic_read(&jc->gen);
+    jc->array[hash].gen = tb_jmp_cache_gen(jc, s.pc);
     qatomic_set(&jc->array[hash].tb, tb);
 
 hit:
@@ -1047,7 +1047,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 jc = cpu->tb_jmp_cache;
                 jc->translations++;
                 jc->array[h].pc = s.pc;
-                jc->array[h].gen = qatomic_read(&jc->gen);
+                jc->array[h].gen = tb_jmp_cache_gen(jc, s.pc);
                 qatomic_set(&jc->array[h].tb, tb);
             }
 

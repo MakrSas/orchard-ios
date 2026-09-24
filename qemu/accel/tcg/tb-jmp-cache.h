@@ -13,12 +13,14 @@
 #include "exec/cpu-common.h"
 
 /*
- * 4096 entries, as upstream. A generation-based flush (below) made a bigger
- * cache free to empty, but 16384 entries measured no better on an iPhone
- * running a macOS guest: the lookups that remain are not misses, and a
- * 384 KiB cache per vCPU no longer fits in the core's L1.
+ * 16384 entries, four times upstream's. On a macOS guest some 12% of the
+ * 20-odd million lookups a second missed, nearly all because the slot held
+ * another pc: with upstream's layout every 16 KiB page shares 64 slots, and
+ * a hot kernel page alone has more TBs than that. Each miss costs a trip
+ * through the QHT, far more than a jump-cache line in L2 instead of L1.
+ * Page flushes and the user-half flush stay cheap (tb-hash.h, below).
  */
-#define TB_JMP_CACHE_BITS 12
+#define TB_JMP_CACHE_BITS 14
 #define TB_JMP_CACHE_SIZE (1 << TB_JMP_CACHE_BITS)
 
 /*
@@ -28,14 +30,16 @@
  * non-NULL value of 'tb'.  Strictly speaking pc is only needed for
  * CF_PCREL, but it's used always for simplicity.
  *
- * An entry is live only while its 'gen' equals the cache's: flushing the
- * whole cache is one increment of 'gen' (tcg_flush_jmp_cache), which retires
- * every entry at once. Entries that are cleared one at a time still clear
- * 'tb', as before.
+ * An entry is live only while its 'gen' equals the cache's generation for
+ * its half of the address space: 'gen' for pc with bit 63 set (the kernel's
+ * half), 'gen_lo' for the rest. Flushing the whole cache is one increment of
+ * each (tcg_flush_jmp_cache), which retires every entry at once, and an ASID
+ * change retires the user half with one increment of 'gen_lo'. Entries that
+ * are cleared one at a time still clear 'tb', as before.
  */
 typedef struct CPUJumpCache {
     struct rcu_head rcu;
-    uint32_t gen;
+    uint32_t gen, gen_lo;
     /*
      * Counters for the app's profile line (orchard_tcg_stats). Each is
      * written by its own vCPU only, except 'flushes', which other vCPUs
@@ -50,5 +54,11 @@ typedef struct CPUJumpCache {
         uint32_t gen;
     } array[TB_JMP_CACHE_SIZE];
 } CPUJumpCache;
+
+/* The generation an entry for @pc must carry to be live. */
+static inline uint32_t tb_jmp_cache_gen(CPUJumpCache *jc, vaddr pc)
+{
+    return (int64_t)pc < 0 ? qatomic_read(&jc->gen) : qatomic_read(&jc->gen_lo);
+}
 
 #endif /* ACCEL_TCG_TB_JMP_CACHE_H */
