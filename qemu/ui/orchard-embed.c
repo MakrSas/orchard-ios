@@ -24,6 +24,7 @@
 #include "ui/input.h"
 #include "ui/surface.h"
 #include "system/system.h"
+#include "block/block.h"
 #include "standard-headers/linux/input-event-codes.h"
 
 /*
@@ -148,6 +149,40 @@ static void orchard_display_gaps(int64_t* min_ms, int64_t* mean_ms, int64_t* max
     *max_ms  = orchard_gap_count ? orchard_gap_max_ns / SCALE_MS : 0;
     *mean_ms = orchard_gap_count ? (orchard_gap_sum_ns / (int64_t)orchard_gap_count) / SCALE_MS : 0;
     orchard_gap_count = orchard_gap_sum_ns = 0;
+}
+
+/*
+ * Write everything the block layer holds for the guest's disks to the files:
+ * qcow2's cached tables, then fsync. For the app going to the background,
+ * where iOS may end it without another word. Takes the BQL; any thread.
+ */
+void orchard_block_flush(void);
+void orchard_block_flush(void)
+{
+    bool locked = bql_locked();
+
+    if (!locked) {
+        bql_lock();
+    }
+    bdrv_flush_all();
+    if (!locked) {
+        bql_unlock();
+    }
+}
+
+extern uint64_t orchard_blk_flushes, orchard_blk_errors;
+extern int orchard_blk_last_errno, orchard_blk_wce;
+
+/* See hw/block/virtio-blk.c. */
+void orchard_blk_stats(uint64_t *flushes, uint64_t *errors, int *last_errno,
+                       int *wce);
+void orchard_blk_stats(uint64_t *flushes, uint64_t *errors, int *last_errno,
+                       int *wce)
+{
+    *flushes = qatomic_read(&orchard_blk_flushes);
+    *errors = qatomic_read(&orchard_blk_errors);
+    *last_errno = qatomic_read(&orchard_blk_last_errno);
+    *wce = qatomic_read(&orchard_blk_wce);
 }
 
 void orchard_display_stats(OrchardDisplayStats* out)

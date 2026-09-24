@@ -68,11 +68,26 @@ void virtio_blk_req_complete(VirtIOBlockReq *req, unsigned char status)
     virtio_notify(vdev, req->vq);
 }
 
+#ifdef CONFIG_ORCHARD_EMBED
+/*
+ * For the app's log (orchard_blk_stats): flushes the guest asked for, I/O
+ * errors and the last errno, and whether the guest runs with a write cache
+ * (and so is expected to flush) at all.
+ */
+uint64_t orchard_blk_flushes, orchard_blk_errors;
+int orchard_blk_last_errno, orchard_blk_wce = -1;
+#endif
+
 static int virtio_blk_handle_rw_error(VirtIOBlockReq *req, int error,
                                       bool is_read)
 {
     VirtIOBlock *s = req->dev;
     BlockErrorAction action = blk_get_error_action(s->blk, is_read, error);
+
+#ifdef CONFIG_ORCHARD_EMBED
+    qatomic_inc(&orchard_blk_errors);
+    qatomic_set(&orchard_blk_last_errno, error);
+#endif
 
     if (action == BLOCK_ERROR_ACTION_STOP) {
         /* Break the link as the next request is going to be parsed from the
@@ -910,6 +925,9 @@ static int virtio_blk_handle_request(VirtIOBlockReq *req, MultiReqBuffer *mrb)
         break;
     }
     case VIRTIO_BLK_T_FLUSH:
+#ifdef CONFIG_ORCHARD_EMBED
+        qatomic_inc(&orchard_blk_flushes);
+#endif
         virtio_blk_handle_flush(req, mrb);
         break;
     case VIRTIO_BLK_T_ZONE_REPORT:
@@ -1340,6 +1358,9 @@ static int virtio_blk_set_status(VirtIODevice *vdev, uint8_t status)
                                    virtio_vdev_has_feature(vdev,
                                                            VIRTIO_BLK_F_WCE));
     }
+#ifdef CONFIG_ORCHARD_EMBED
+    qatomic_set(&orchard_blk_wce, blk_enable_write_cache(s->blk));
+#endif
     return 0;
 }
 

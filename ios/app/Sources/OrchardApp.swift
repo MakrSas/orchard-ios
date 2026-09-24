@@ -239,6 +239,7 @@ final class VMModel: ObservableObject {
                     if VMConfig.macGuest && self.config.audio {
                         GuestSound.shared.start()
                     }
+                    DiskWatch.shared.start()
                     self.serial.follow()
                     self.serial.attachInput(port: self.config.serialPort)
                     // The shell is opened without waiting for anyone to look at
@@ -333,6 +334,7 @@ final class VMModel: ObservableObject {
     /// unwind its main loop and flush the disks first.
     func shutdown() {
         guard isRunning else { return }
+        DiskWatch.shared.flush(reason: L("выключение"))
         LogCapture.shared.note(L("Выключение: отправляю QMP quit…"))
         VMModel.publishDisplayLogs()
         qmp.quit { report in LogCapture.shared.note(report) }
@@ -1387,6 +1389,12 @@ struct GuestActions: ViewModifier {
                 if phase == .active {
                     model.refreshJIT()
                     model.refreshFiles()
+                }
+                // Leaving the foreground is the last word iOS is sure to give
+                // before it may end the app: get the guest's writes into the
+                // overlay file while it can.
+                if phase == .background && model.isRunning {
+                    DiskWatch.shared.flush(reason: L("приложение ушло в фон"))
                 }
             }
     }
