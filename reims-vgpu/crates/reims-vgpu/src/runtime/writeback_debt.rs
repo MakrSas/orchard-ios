@@ -1471,37 +1471,6 @@ pub(crate) fn pay_key<M: HostMemory + HostOps>(
 /// lazy: `settle_guest_writes_unless_disjoint` runs the closure only when
 /// something is outstanding, and a mapping that cannot name its pages answers
 /// `None`, which waits.
-/// Pay every surface debt whose pages meet `read`: the frame another mapping
-/// of the same memory is owed is what a reader of these pages must see.
-pub fn pay_overlapping<M: HostMemory + HostOps>(state: &mut DeviceState, host: &mut M, read: &[u64]) {
-    if state.pending_writebacks.is_empty() || read.is_empty() {
-        return;
-    }
-    let read: std::collections::HashSet<u64> = read.iter().copied().collect();
-    let owed: Vec<u32> = state
-        .pending_writebacks
-        .mappings_by_age()
-        .into_iter()
-        .filter(|&mapping_id| {
-            state
-                .mapping_reach_pages(mapping_id)
-                .is_some_and(|pages| pages.iter().any(|p| read.contains(p)))
-        })
-        .collect();
-    for mapping_id in owed {
-        crate::runtime::drain::note_store_route("wbdebt_paid_overlap");
-        pay_for_mapping(state, host, mapping_id);
-    }
-}
-
-/// Pay every surface debt.
-fn pay_all_surfaces<M: HostMemory + HostOps>(state: &mut DeviceState, host: &mut M) {
-    for mapping_id in state.pending_writebacks.mappings_by_age() {
-        crate::runtime::drain::note_store_route("wbdebt_paid_unnamed_reader");
-        pay_for_mapping(state, host, mapping_id);
-    }
-}
-
 pub fn settle_for_mapping<M: HostMemory + HostOps>(
     state: &mut DeviceState,
     host: &mut M,
@@ -1514,12 +1483,6 @@ pub fn settle_for_mapping<M: HostMemory + HostOps>(
     // landed, or the reach walk itself, and those want opposite repairs.
     let pay_started = std::time::Instant::now();
     pay_for_mapping(state, host, mapping_id);
-    // And the debts other mappings of the same pages owe.
-    if !state.pending_writebacks.is_empty() {
-        if let Some(pages) = state.mapping_reach_pages(mapping_id) {
-            pay_overlapping(state, host, &pages);
-        }
-    }
     crate::runtime::drain::note_store_route_us(
         "wbdebt_pay_us",
         pay_started.elapsed().as_micros() as u64,
@@ -1595,22 +1558,6 @@ pub fn settle_for_texture<M: HostMemory + HostOps>(
         });
     }
     pay_for_texture(state, host, task_id, texture_ref);
-    // The reference may name no surface the ledger knows while its pages are
-    // one a debt was armed through another mapping of: an IOSurface an app drew
-    // and the compositor samples. Pay whatever overlaps what is about to be read.
-    if !state.pending_writebacks.is_empty() {
-        let (tasks, page_shift, page_size) = (&state.tasks, state.page_shift, state.page_size());
-        let want = reims_vgpu_paging::span::pages_spanned(gva, span, page_size);
-        let gpas = crate::runtime::gva_mem::task_gva_page_gpas(
-            host, tasks, task_id, gva, span, page_shift,
-        );
-        if gpas.len() as u64 == want {
-            pay_overlapping(state, host, &gpas);
-        } else {
-            // Pages it cannot name: owe all, as for any unnameable reader.
-            pay_all_surfaces(state, host);
-        }
-    }
     let (tasks, page_shift, page_size) = (&state.tasks, state.page_shift, state.page_size());
     crate::runtime::render_writeback::settle_guest_writes_unless_disjoint(site, || {
         let want = reims_vgpu_paging::span::pages_spanned(gva, span, page_size);

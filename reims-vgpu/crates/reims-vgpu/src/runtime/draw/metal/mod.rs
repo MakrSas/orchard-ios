@@ -133,111 +133,6 @@ fn plan_resident_target<M: HostMemory + HostOps>(
     })
 }
 
-/// Whether a surface Store leaves its frame on the GPU and owes the guest a
-/// copy (runtime/writeback_debt.rs) instead of writing it back now. Opt-in,
-/// ORCHARD_METAL_LAZY_STORE=1, while it is being tried: its first version
-/// showed empty windows, because the compositor read a surface through another
-/// mapping of the same pages than the one the debt was named by.
-fn metal_lazy_store() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("ORCHARD_METAL_LAZY_STORE").is_ok_and(|v| v == "1")
-            && crate::runtime::writeback_debt::lazy_writeback_enabled()
-    })
-}
-
-/// Record that `mapping_id` is owed the frame its retained target now holds,
-/// and make that target the surface's published frame, as the Vulkan rail's
-/// `arm_surface_writeback_debt` does. `false` when the mapping or its
-/// geometry cannot take a debt; the caller then stores eagerly.
-fn arm_metal_surface_debt<M: HostMemory + HostOps>(
-    state: &mut DeviceState,
-    host: &mut M,
-    mapping_id: u32,
-    plan: &ResidentPlan,
-    width: u32,
-    height: u32,
-) -> bool {
-    let Some(map_generation) = state.mappings.get(&mapping_id).map(|m| m.map_generation) else {
-        return false;
-    };
-    if !crate::runtime::surface_cache::cede_surface_to_resident(state, mapping_id, width, height) {
-        crate::runtime::drain::note_store_route("wbdebt_uncedable_geometry");
-        return false;
-    }
-    if let Some(m) = state.mappings.get(&mapping_id) {
-        let format = if m.format != 0 {
-            m.format
-        } else {
-            crate::protocol::pixel_format::MTL_FORMAT_BGRA8_UNORM
-        };
-        if let Some((base_off, _bpr, span_end)) =
-            crate::runtime::mapping_write::mapper_ref_texture_sample_window(
-                m, width, height, format,
-            )
-        {
-            state.invalidate_storage_residency_window(mapping_id, base_off, span_end);
-        }
-    }
-    let _ = state.note_surface_content_published(mapping_id);
-    let evicted = state.pending_writebacks.arm(
-        mapping_id,
-        crate::runtime::resident_target::ResidentTarget::new(
-            crate::backend::metal::resident::MetalSurfaceTarget(plan.key),
-        ),
-        width,
-        height,
-        map_generation,
-    );
-    if let Some(evicted) = evicted {
-        crate::runtime::drain::note_store_route("wbdebt_evicted");
-        let crate::runtime::writeback_debt::WritebackKey::Mapping(evicted_id) = evicted;
-        crate::runtime::writeback_debt::pay_for_mapping(state, host, evicted_id);
-    }
-    crate::runtime::mapper::stamp_guest_write_gen(state, host, mapping_id);
-    crate::runtime::drain::note_store_route("metal_surface_store_deferred");
-    true
-}
-
-/// Land the frame `key`'s retained target holds in `mapping_id`'s guest pages:
-/// the payment of a deferred Store, and the fallback of one that could not be
-/// deferred after all. The target keeps its claim to the frame afterwards.
-pub(crate) fn store_surface_from_resident<M: HostMemory + HostOps>(
-    state: &mut DeviceState,
-    host: &mut M,
-    mapping_id: u32,
-    key: &crate::backend::metal::resident::ResidentColorKey,
-    width: u32,
-    height: u32,
-) -> bool {
-    let _span = chain_phase::CostSpan::new("metal_surface_store_paid_us");
-    let Some(rgba) = crate::backend::metal::resident::read_rgba8(key) else {
-        crate::observe::fail(format!(
-            "metal_surface_pay_lost mapping={mapping_id} {width}x{height} reason=no_resident"
-        ));
-        return false;
-    };
-    if !mapping_write::write_rgba8_image_changed(
-        state,
-        host,
-        mapping_id,
-        &rgba,
-        None,
-        width,
-        height,
-        mapping_write::FramePublication::RailResident,
-    ) {
-        return false;
-    }
-    if let Some(generation) =
-        crate::runtime::surface_cache::frame_generation(state, mapping_id, width, height)
-    {
-        crate::backend::metal::resident::published(key, generation);
-    }
-    crate::runtime::drain::note_store_route("metal_surface_store_paid");
-    true
-}
-
 /// Whether multi-draw chains go through the CPU as they used to
 /// (ORCHARD_METAL_CPU_CHAIN=1) instead of staying on the GPU.
 fn metal_cpu_chain() -> bool {
@@ -1083,29 +978,10 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
     let resident_chain = !writeback_guest
         && color_list.iter().all(|c| c.mapping_id != 0)
         && !metal_cpu_chain();
-    // A surface Store whose target this rail retains owes the guest the frame
-    // rather than writing it now (arm_metal_surface_debt), so it reads nothing
-    // back either. One colour target, a mapped surface, a geometry the surface
-    // cache takes: what the ledger's debt can name.
-    let lazy_store = writeback_guest
-        && !resident_chain
-        && color_list.len() == 1
-        && color_list[0].mapping_id != 0
-        && color_list[0].store_action != MTL_STORE_ACTION_DONT_CARE
-        && crate::model::scanout_extent_ok(width, height)
-        && state.mappings.contains_key(&color_list[0].mapping_id)
-        && metal_lazy_store()
-        && !metal_cpu_chain();
     let mut color_outs: Vec<Vec<u8>> = {
         let _outs = chain_phase::CostSpan::new("metal_seed_outs_us");
         (0..color_list.len())
-            .map(|_| {
-                if resident_chain || lazy_store {
-                    Vec::new()
-                } else {
-                    vec![0u8; need]
-                }
-            })
+            .map(|_| if resident_chain { Vec::new() } else { vec![0u8; need] })
             .collect()
     };
 
@@ -1336,10 +1212,6 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
         samples: None,
     });
     chain_phase::enter(chain_phase::Phase::Engine);
-    // Only a chain's intermediate record may leave its pass open: the Store
-    // that ends a chain submits it, so nothing encoded elsewhere afterwards can
-    // run ahead of it.
-    crate::backend::metal::render::set_chain_continues(!writeback_guest);
     let st = render_core_mrt(
         &vert,
         &frag,
@@ -1430,26 +1302,6 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
     }
     for (i, c) in color_list.iter().enumerate() {
         if c.store_action == MTL_STORE_ACTION_DONT_CARE {
-            continue;
-        }
-        if lazy_store {
-            let Some(plan) = resident_plan.get(i).and_then(|p| p.as_ref()) else {
-                continue;
-            };
-            let _span_lazy = chain_phase::CostSpan::new("metal_store_deferred_us");
-            if arm_metal_surface_debt(state, host, c.mapping_id, plan, width, height) {
-                any_write = true;
-                publish_resident_target(state, plan);
-            } else if store_surface_from_resident(
-                state,
-                host,
-                c.mapping_id,
-                &plan.key,
-                width,
-                height,
-            ) {
-                any_write = true;
-            }
             continue;
         }
         let out_rgba = &color_outs[i];
