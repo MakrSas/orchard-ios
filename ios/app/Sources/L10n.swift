@@ -52,6 +52,7 @@ enum L10n {
         ("Процессор", "Processor"),
         ("macOS подписывает указатели (PAC), и эмулятор считал каждую подпись, это 10–15% его работы. С этим переключателем гость по-прежнему видит PAC, но подписи не считаются и проверки всегда проходят. Если macOS перестанет загружаться, выключите. Применяется при запуске машины.",
             "macOS signs its pointers (PAC), and the emulator computed every signature, 10-15% of its work. With this on the guest still sees PAC, but no signature is computed and every check passes. If macOS stops booting, turn it off. Applies when the machine starts."),
+        ("Поток %@: %d замеров", "Thread %@: %d samples"),
         ("приложение ушло в фон", "the app went to the background"),
         ("выключение", "shutting down"),
         ("с кешем записи (гость сам сбрасывает)", "write cache on (the guest flushes it)"),

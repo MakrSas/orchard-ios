@@ -2448,6 +2448,31 @@ fn write_mapping_rgba8_rect<M: HostMemory + HostOps>(
         static RAW: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     }
     let len = tight.saturating_mul(rect_h as usize);
+    // Straight into the guest's pages where they are one contiguous span.
+    {
+        let _convert_span = chain_phase::CostSpan::new("metal_rect_direct_us");
+        let x0 = (origin_x as usize) * 4;
+        let row_px = (rect_w as usize) * 4;
+        if let Some(done) = mapping_write::write_rect_rows_with(
+            state,
+            host,
+            mapping_id,
+            mapping_write::Rect {
+                origin_x,
+                origin_y,
+                width: rect_w,
+                height: rect_h,
+            },
+            |dy, dst| {
+                let y = origin_y as usize + dy;
+                let src = &rgba[y * rgba_row + x0..y * rgba_row + x0 + row_px];
+                store_rail.convert(src, rect_w, dst)
+            },
+        ) {
+            crate::runtime::drain::note_store_route_n("metal_rect_bytes", len as u64);
+            return done;
+        }
+    }
     RAW.with(|cell| {
         let mut raw = cell.borrow_mut();
         if raw.len() < len {

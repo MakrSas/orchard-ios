@@ -49,6 +49,10 @@ enum Sampler {
             let tcgBefore = tcgStats()
             let started = Date()
             var bySymbol: [String: Int] = [:]
+            // Per thread as well, for the ones that are not vCPUs: the graphics
+            // drain has a profile of its own that the combined one drowns.
+            var byThread: [thread_t: [String: Int]] = [:]
+            var threadTotal: [thread_t: Int] = [:]
             var byGroup: [String: Int] = [:]
             var total = 0
             let deadline = Date().addingTimeInterval(4)
@@ -60,6 +64,8 @@ enum Sampler {
                     guard let pc else { continue }
                     let name = symbol(pc)
                     bySymbol[name, default: 0] += 1
+                    byThread[thread, default: [:]][name, default: 0] += 1
+                    threadTotal[thread, default: 0] += 1
                     byGroup[group(name), default: 0] += 1
                     total += 1
                 }
@@ -72,6 +78,15 @@ enum Sampler {
                 .map { "\($0.key) \(percent($0.value))" }.joined(separator: " · "))
             for (name, n) in bySymbol.sorted(by: { $0.value > $1.value }).prefix(30) {
                 lines.append("  \(percent(n))  \(name)")
+            }
+            for thread in busy {
+                let label = threadName(thread)
+                guard let counts = byThread[thread], let n = threadTotal[thread], n > 0,
+                      !label.hasPrefix("CPU") else { continue }
+                lines.append("  " + L("Поток %@: %d замеров", label, n))
+                for (name, c) in counts.sorted(by: { $0.value > $1.value }).prefix(15) {
+                    lines.append(String(format: "    %.1f%%  ", Double(c) * 100 / Double(n)) + name)
+                }
             }
             if let before = tcgBefore, let after = tcgStats() {
                 lines.append(tcgLine(before, after, Date().timeIntervalSince(started)))
@@ -104,6 +119,15 @@ enum Sampler {
         ].joined(separator: " · ")
     }
 
+    /// A thread's pthread name, or its port number when it has none.
+    private static func threadName(_ thread: thread_t) -> String {
+        guard let p = pthread_from_mach_thread_np(thread) else { return "#\(thread)" }
+        var buf = [CChar](repeating: 0, count: 64)
+        pthread_getname_np(p, &buf, buf.count)
+        let name = String(cString: buf)
+        return name.isEmpty ? "#\(thread)" : name
+    }
+
     /// The function a PC is in, or the translator's buffer when it is in none.
     private static func symbol(_ pc: UInt64) -> String {
         var info = Dl_info()
@@ -127,7 +151,7 @@ enum Sampler {
             (L("ожидание"), ["__psynch", "__semwait", "mach_msg", "__ulock", "qemu_cond", "qemu_mutex", "qemu_sem",
                              "pthread_", "__select", "poll", "kevent"]),
             (L("криптография гостя"), ["helper_crypto"]),
-            ("reims-vgpu", ["reims_vgpu", "_ZN10reims_vgpu", "_ZN"]),
+            ("reims-vgpu", ["reims_vgpu", "_ZN10reims_vgpu", "_ZN", "_R"]),
         ]
         for (label, prefixes) in groups where prefixes.contains(where: { name.hasPrefix($0) }) {
             return label

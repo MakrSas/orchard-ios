@@ -2338,6 +2338,79 @@ pub fn write_full_rect_raw_at<M: HostMemory + HostOps>(
     )
 }
 
+/// [`write_rect_raw`], with each destination row produced in place by `fill`
+/// instead of copied from a staged buffer: `fill(row, dst)` writes row `row` of
+/// the rect, `dst` being exactly that row's bytes in the guest's pages.
+///
+/// Only for a surface whose pages this device can reach as one contiguous
+/// host span, which is the case the staging copy was costing most in; `None`
+/// (before anything is written) sends the caller to [`write_rect_raw`].
+/// Otherwise the same checks, settlement and bookkeeping as that writer.
+pub fn write_rect_rows_with<M: HostMemory + HostOps>(
+    state: &mut DeviceState,
+    host: &mut M,
+    mapping_id: u32,
+    rect: Rect,
+    mut fill: impl FnMut(usize, &mut [u8]) -> bool,
+) -> Option<bool> {
+    let window = mapping_geom_window(state, mapping_id, rect)?;
+    let SurfaceWindow {
+        base_off,
+        bpr: surface_bpr,
+        span_end,
+        bpp,
+    } = window;
+    let Rect {
+        origin_x,
+        origin_y,
+        width,
+        height,
+    } = rect;
+    if !scanout_extent_ok(width, height) || bpp == 0 {
+        return None;
+    }
+    let m = state.mappings.get(&mapping_id)?;
+    if !m.mapped || m.page_entries.is_empty() {
+        return None;
+    }
+    let rb = width.checked_mul(bpp)? as usize;
+    let x_off = (origin_x as u64).saturating_mul(bpp as u64);
+    if x_off.saturating_add(rb as u64) > surface_bpr as u64 {
+        return None;
+    }
+    let bpr = surface_bpr as usize;
+    if rect_extent_end(base_off, origin_y, height, bpr, x_off, rb) > span_end {
+        return None;
+    }
+    crate::runtime::writeback_debt::settle_for_mapping(
+        state,
+        host,
+        mapping_id,
+        crate::runtime::render_writeback::SettleSite::MappingRectWrite,
+    );
+    let vouched = vouch_for_write(state, host, mapping_id, "rect_rows")?;
+    let (ptr, _) = contig_for_write(state, host, mapping_id, span_end, &vouched)?;
+    crate::runtime::drain::note_store_route("rectwr_rows_direct_n");
+    // SAFETY: the contiguous view covers span_end, and the rect's last byte is
+    // within it (checked above).
+    let base = unsafe { (ptr as *mut u8).add(base_off as usize) };
+    for y in 0..height as usize {
+        let row_off = ((origin_y as usize) + y)
+            .saturating_mul(bpr)
+            .saturating_add(x_off as usize);
+        let dst = unsafe { std::slice::from_raw_parts_mut(base.add(row_off), rb) };
+        if !fill(y, dst) {
+            return Some(false);
+        }
+    }
+    state.invalidate_storage_residency_window(mapping_id, base_off, span_end);
+    let _ = state.mark_mapping_written(mapping_id);
+    // As write_rect_raw_at_impl: no host copy represents these pages now.
+    crate::runtime::surface_cache::forget(state, mapping_id);
+    crate::runtime::mapper::stamp_guest_write_gen(state, host, mapping_id);
+    Some(true)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn write_rect_raw_at_impl<M: HostMemory + HostOps>(
     state: &mut DeviceState,

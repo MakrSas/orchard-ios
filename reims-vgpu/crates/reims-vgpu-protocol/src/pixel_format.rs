@@ -3002,7 +3002,36 @@ pub fn narrows_to_unorm8(format: u16) -> bool {
 /// 1 GB/s on an iPhone and was most of a surface Store's cost, which converts
 /// up to a whole 960x540 frame at a time.
 pub fn swap_red_blue(src: &[u8], dst: &mut [u8]) {
-    for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+    let n = src.len().min(dst.len()) / 4 * 4;
+    #[cfg(target_arch = "aarch64")]
+    let done = {
+        use core::arch::aarch64::{vld1q_u8, vqtbl1q_u8, vst1q_u8};
+        // One TBL per four texels: bytes 2,1,0,3 of each.
+        const IDX: [u8; 16] = [2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15];
+        let blocks = n / 64 * 64;
+        // SAFETY: NEON is baseline on aarch64; every load and store below is
+        // within the first `blocks` bytes of both slices.
+        unsafe {
+            let idx = vld1q_u8(IDX.as_ptr());
+            let (sp, dp) = (src.as_ptr(), dst.as_mut_ptr());
+            let mut i = 0;
+            while i < blocks {
+                let a = vld1q_u8(sp.add(i));
+                let b = vld1q_u8(sp.add(i + 16));
+                let c = vld1q_u8(sp.add(i + 32));
+                let d = vld1q_u8(sp.add(i + 48));
+                vst1q_u8(dp.add(i), vqtbl1q_u8(a, idx));
+                vst1q_u8(dp.add(i + 16), vqtbl1q_u8(b, idx));
+                vst1q_u8(dp.add(i + 32), vqtbl1q_u8(c, idx));
+                vst1q_u8(dp.add(i + 48), vqtbl1q_u8(d, idx));
+                i += 64;
+            }
+        }
+        blocks
+    };
+    #[cfg(not(target_arch = "aarch64"))]
+    let done = 0;
+    for (s, d) in src[done..n].chunks_exact(4).zip(dst[done..n].chunks_exact_mut(4)) {
         let v = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
         let w = (v & 0xff00_ff00) | ((v >> 16) & 0x0000_00ff) | ((v & 0x0000_00ff) << 16);
         d.copy_from_slice(&w.to_le_bytes());
@@ -5919,7 +5948,7 @@ mod swap_red_blue_tests {
 
     #[test]
     fn swap_red_blue_matches_the_byte_swizzle_both_ways() {
-        let src: Vec<u8> = (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+        let src: Vec<u8> = (0..4096u32 + 68).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
         let mut fast = vec![0u8; src.len()];
         swap_red_blue(&src, &mut fast);
         for (s, d) in src.chunks_exact(4).zip(fast.chunks_exact(4)) {
