@@ -1847,48 +1847,82 @@ fn host_buffer(device: &Device, data: *const u8, len: usize) -> Option<(Buffer, 
     if data.is_null() || len == 0 {
         return None;
     }
-    let len64 = len as u64;
-    if len64 <= RING_SIZE / 8 {
-        let mut ring = RING.lock();
-        if ring.is_none() {
-            if let Some(buffer) = crate::backend::metal::raw_metal::new_buffer(
-                device,
-                RING_SIZE,
-                MTLResourceOptions::StorageModeShared,
-            ) {
-                *ring = Some(Ring {
-                    buffer,
-                    size: RING_SIZE,
-                    offset: 0,
-                });
-            }
-        }
-        if let Some(r) = ring.as_mut() {
-            let mut start = r.offset.div_ceil(256) * 256;
-            let mut fits = start + len64 <= r.size;
-            if !fits && !RING_IN_DRAW.with(|f| f.get()) {
-                wait_pending();
-                start = 0;
-                fits = true;
-            }
-            if fits {
-                // SAFETY: [start, start + len) lies inside the ring, and no
-                // command buffer that could read it is still running (above).
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        data,
-                        (r.buffer.contents() as *mut u8).add(start as usize),
-                        len,
-                    );
-                }
-                r.offset = start + len64;
-                RING_IN_DRAW.with(|f| f.set(true));
-                crate::runtime::drain::note_store_route("metal_ring_binds");
-                return Some((r.buffer.clone(), start));
+    // Bytes the draw layer already read straight into the ring (ring_reserve)
+    // are bound where they are.
+    {
+        let ring = RING.lock();
+        if let Some(r) = ring.as_ref() {
+            let base = r.buffer.contents() as usize;
+            let at = data as usize;
+            if at >= base && at + len <= base + r.size as usize {
+                crate::runtime::drain::note_store_route("metal_ring_binds_in_place");
+                return Some((r.buffer.clone(), (at - base) as u64));
             }
         }
     }
+    if let Some((buffer, start, dst)) = ring_alloc(device, len) {
+        // SAFETY: ring_alloc handed out [start, start + len) of the ring, which
+        // no command buffer still running can read.
+        unsafe { core::ptr::copy_nonoverlapping(data, dst, len) };
+        crate::runtime::drain::note_store_route("metal_ring_binds");
+        return Some((buffer, start));
+    }
     new_buffer_from_host(device, data, len).map(|b| (b, 0))
+}
+
+/// Space for `len` bytes in the ring, for this draw: the buffer, the offset
+/// and a pointer to write through. `None` for a size the ring does not take,
+/// or when it is full and cannot wrap under the current draw.
+fn ring_alloc(device: &DeviceRef, len: usize) -> Option<(Buffer, u64, *mut u8)> {
+    let len64 = len as u64;
+    if len == 0 || len64 > RING_SIZE / 8 {
+        return None;
+    }
+    let mut ring = RING.lock();
+    if ring.is_none() {
+        let buffer = crate::backend::metal::raw_metal::new_buffer(
+            device,
+            RING_SIZE,
+            MTLResourceOptions::StorageModeShared,
+        )?;
+        *ring = Some(Ring {
+            buffer,
+            size: RING_SIZE,
+            offset: 0,
+        });
+    }
+    let r = ring.as_mut()?;
+    let mut start = r.offset.div_ceil(256) * 256;
+    if start + len64 > r.size {
+        if RING_IN_DRAW.with(|f| f.get()) {
+            return None;
+        }
+        wait_pending();
+        start = 0;
+    }
+    r.offset = start + len64;
+    RING_IN_DRAW.with(|f| f.set(true));
+    // SAFETY: start + len <= size, checked above.
+    let dst = unsafe { (r.buffer.contents() as *mut u8).add(start as usize) };
+    Some((r.buffer.clone(), start, dst))
+}
+
+/// A draw's own slice of the ring, to read guest bytes into directly; see
+/// [`host_buffer`], which then binds them without another copy. Valid until
+/// the draw is encoded: the ring does not wrap under a draw that holds space
+/// in it ([`begin_draw`]).
+pub fn ring_reserve(len: usize) -> Option<&'static mut [u8]> {
+    let device = system_device()?;
+    let (_, _, dst) = ring_alloc(device, len)?;
+    // SAFETY: the range was just handed out and nothing else writes it.
+    Some(unsafe { core::slice::from_raw_parts_mut(dst, len) })
+}
+
+/// Start of one draw's encode: from here until it is submitted, the ring may
+/// not wrap over what it reserves (nor over what an open pass still holds).
+pub fn begin_draw() {
+    let ring_held = OPEN.lock().is_some();
+    RING_IN_DRAW.with(|f| f.set(ring_held));
 }
 
 /// Whether every draw gets its own pass as before (ORCHARD_METAL_PASS_PER_DRAW=1).
@@ -2028,10 +2062,6 @@ pub fn render_core_mrt(
             .as_ref()
             .is_some_and(|s| s.store_action == REIMS_VGPU_MTL_STORE_ACTION_STORE);
     let _copy_host_buffers = crate::backend::metal::runtime::ForceCopy::new(!reads_back);
-    // An open pass holds ring space from the chain's earlier records, which a
-    // wrap would overwrite before they run.
-    let ring_held = OPEN.lock().is_some();
-    RING_IN_DRAW.with(|f| f.set(ring_held));
     // Widened here rather than at the call, so the `as usize` on each of these
     // happens once and the caller passes the decoded draw whole. These were five
     // positional parameters, four of them `usize`; the sole caller reached them

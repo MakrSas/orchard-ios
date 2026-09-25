@@ -383,16 +383,25 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
     // Archive apple-pv-gpu-exec: a non-zero bound buffer that does not resolve
     // sets all_binds_ok=false and gates the draw (never feeds garbage geometry).
     chain_phase::enter(chain_phase::Phase::Binds);
-    let mut vtx_storage: Vec<Vec<u8>> = Vec::new();
-    let mut frag_storage: Vec<Vec<u8>> = Vec::new();
+    // Read straight into the GPU buffer ring where it has room, so each bound
+    // buffer is copied once instead of into a Vec and then into the ring.
+    crate::backend::metal::render::begin_draw();
+    let mut vtx_storage: Vec<crate::runtime::draw::HostBytes<'static>> = Vec::new();
+    let mut frag_storage: Vec<crate::runtime::draw::HostBytes<'static>> = Vec::new();
     let mut vtx_bind_idx: Vec<u32> = Vec::new();
     let mut frag_bind_idx: Vec<u32> = Vec::new();
     for b in req.vertex_buffers.iter() {
         if b.buffer_ref == 0 {
             continue;
         }
-        let Some(bytes) = load_buffer_bytes(state, host, req.task_id, b.buffer_ref, b.offset)
-        else {
+        let Some(bytes) = crate::runtime::draw::load_buffer_bytes_into(
+            state,
+            host,
+            req.task_id,
+            b.buffer_ref,
+            b.offset,
+            crate::backend::metal::render::ring_reserve,
+        ) else {
             crate::observe::fail(format!(
                 "metal_draw gate: vertex buffer miss ref={} idx={} off={}",
                 b.buffer_ref, b.index, b.offset
@@ -409,8 +418,14 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
         if b.buffer_ref == 0 {
             continue;
         }
-        let Some(bytes) = load_buffer_bytes(state, host, req.task_id, b.buffer_ref, b.offset)
-        else {
+        let Some(bytes) = crate::runtime::draw::load_buffer_bytes_into(
+            state,
+            host,
+            req.task_id,
+            b.buffer_ref,
+            b.offset,
+            crate::backend::metal::render::ring_reserve,
+        ) else {
             crate::observe::fail(format!(
                 "metal_draw gate: fragment buffer miss ref={} idx={} off={}",
                 b.buffer_ref, b.index, b.offset

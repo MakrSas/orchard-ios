@@ -1279,6 +1279,90 @@ fn read_buffer_bytes_resolved<M: HostMemory + HostOps>(
     Some(buf)
 }
 
+/// [`load_buffer_bytes`], reading into the destination `alloc` hands out for
+/// the byte count instead of a fresh zeroed `Vec` — the Metal rail passes its
+/// GPU buffer ring, so the bytes are read once, straight to where the draw
+/// binds them. `alloc` returning `None` falls back to a `Vec`.
+pub(crate) fn load_buffer_bytes_into<'a, M: HostMemory + HostOps>(
+    state: &mut DeviceState,
+    host: &mut M,
+    task_id: u32,
+    buffer_ref: u32,
+    offset: u64,
+    alloc: impl FnOnce(usize) -> Option<&'a mut [u8]>,
+) -> Option<HostBytes<'a>> {
+    let backing = resolve_buffer_backing(state, host, task_id, buffer_ref, None)?;
+    let (gva, size) = (backing.gva, backing.size);
+    if offset >= size {
+        crate::observe::fail(format!(
+            "load_buffer offset oob task={task_id} off={offset} size={size}"
+        ));
+        return None;
+    }
+    let want = host_alloc_len(size - offset).filter(|&n| n > 0)?;
+    crate::runtime::writeback_debt::settle_for_texture(
+        state,
+        host,
+        task_id,
+        buffer_ref,
+        gva + offset,
+        want as u64,
+        crate::runtime::render_writeback::SettleSite::BufferGuestRead,
+    );
+    let read = |host: &mut M, dst: &mut [u8]| -> bool {
+        if gva_mem::read_task_gva_by_id(host, &state.tasks, task_id, gva + offset, dst, state.page_shift)
+            .is_err()
+        {
+            crate::observe::fail(format!(
+                "load_buffer gva read fail task={task_id} gva={gva:#x}+{offset} want={want} shift={}",
+                state.page_shift
+            ));
+            return false;
+        }
+        true
+    };
+    match alloc(want) {
+        Some(slice) if slice.len() == want => {
+            if !read(host, slice) {
+                return None;
+            }
+            Some(HostBytes::Borrowed(slice))
+        }
+        _ => {
+            let mut owned = vec![0u8; want];
+            if !read(host, &mut owned) {
+                return None;
+            }
+            Some(HostBytes::Owned(owned))
+        }
+    }
+}
+
+/// Bytes a draw binds: its own `Vec`, or a slice of a rail's buffer that it
+/// was read straight into.
+pub(crate) enum HostBytes<'a> {
+    Owned(Vec<u8>),
+    Borrowed(&'a mut [u8]),
+}
+
+impl HostBytes<'_> {
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Owned(v) => v,
+            Self::Borrowed(s) => s,
+        }
+    }
+    pub(crate) fn as_ptr(&self) -> *const u8 {
+        self.as_slice().as_ptr()
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+    pub(crate) fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
+    }
+}
+
 /// Standalone CPU buffer read (non-draw-setup callers): resolve + read.
 fn load_buffer_bytes<M: HostMemory + HostOps>(
     state: &mut DeviceState,
