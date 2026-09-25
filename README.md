@@ -6,8 +6,9 @@ An arm64 macOS Ventura guest boots through Apple's own chain — `AVPBooter →
 iBoot → XNU` — on QEMU's `apple-vm` machine, and runs to the desktop. QEMU is
 a library inside the app, the guest's cores are translated by TCG with a JIT,
 and the GPU is [reims-vgpu](https://github.com/steelbrain/reims-vgpu), drawing
-through the phone's own Metal. It is slow — around 15 frames a second at best
-on an iPhone 15 — but it is the real macOS.
+through the phone's own Metal. It is not fast — on an iPhone 15, light scenes
+reach 30–40 frames a second and dragging a window 10–15 — but it is the real
+macOS.
 
 This is the iOS port of [Orchard](https://github.com/yaelliethy/orchard), which
 does the same on a Linux host; that guide is in [`LINUX.md`](LINUX.md).
@@ -80,11 +81,35 @@ machine starts.
   work of 120.
 * **Screen → Trackpad mode**: the pointer moves by how far the finger travels;
   tap to click, two fingers to right-click and scroll, hold then move to drag.
+* **Machine → Processor → Fast pointer authentication**: on by default. The
+  guest still sees pointer authentication, but no signature is computed —
+  that was 10–15% of the emulator's work. Turn it off if macOS stops booting.
+
+For speed, **960×540 at 30 Hz** is the sweet spot: dragging windows is
+limited by how many pixels the guest's compositor redraws.
 
 In the guest itself, **System Settings → Accessibility → Display → Reduce
 transparency** helps noticeably, dragging windows above all: without it macOS
 re-renders the blur behind every translucent window, Dock and menu bar for
 each frame, all on the emulated CPU.
+
+### Turn off software updates in the guest — first thing
+
+Once the guest has internet, Ventura downloads security responses and system
+updates on its own and starts installing them. The install can never finish
+on this machine, and the next boot ends in Recovery with no disk — the data
+volume is intact, but the system will not boot. Right after the first login,
+before connecting to the internet if you can, turn everything off in
+**System Settings → General → Software Update → Automatic updates**, and in
+the guest's Terminal:
+
+```bash
+sudo softwareupdate --schedule off
+sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
+sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false
+sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool false
+sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false
+```
 
 ## 5. Start it
 
