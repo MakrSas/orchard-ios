@@ -1381,6 +1381,7 @@ fn encode_draw_chain_inner<M: HostMemory + HostOps>(
                 // frame, exactly as the full Store's RailResident publication
                 // would have left it, and the next chain loads nothing.
                 if wrote && chain_partial {
+                    let _span_cede = chain_phase::CostSpan::new("metal_rect_cede_us");
                     crate::runtime::surface_cache::cede_surface_to_resident(
                         state,
                         c.mapping_id,
@@ -2440,31 +2441,45 @@ fn write_mapping_rgba8_rect<M: HostMemory + HostOps>(
     let Some(store_rail) = pixel_format::Rgba8ToRow::for_format(format) else {
         return false;
     };
-    let mut raw = vec![0u8; tight.saturating_mul(rect_h as usize)];
-    let mut guest_row = vec![0u8; tight];
-    for dy in 0..rect_h as usize {
-        let y = origin_y as usize + dy;
-        let src = &rgba[y * rgba_row + (origin_x as usize) * 4
-            ..y * rgba_row + (origin_x as usize) * 4 + (rect_w as usize) * 4];
-        // Guest store is native format; convert from tight RGBA8 (same as full write_gva path).
-        if !store_rail.convert(src, rect_w, &mut guest_row) {
-            return false;
-        }
-        raw[dy * tight..dy * tight + tight].copy_from_slice(&guest_row);
+    // Converted straight into a buffer kept across Stores: a fresh one of up to
+    // a whole frame was zero-filled and then paged in 16 KiB at a time on every
+    // Store, and each row went through a second, per-row buffer as well.
+    thread_local! {
+        static RAW: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     }
-    mapping_write::write_rect_raw(
-        state,
-        host,
-        mapping_id,
-        mapping_write::Rect {
-            origin_x,
-            origin_y,
-            width: rect_w,
-            height: rect_h,
-        },
-        &raw,
-        tight as u32,
-    )
+    let len = tight.saturating_mul(rect_h as usize);
+    RAW.with(|cell| {
+        let mut raw = cell.borrow_mut();
+        if raw.len() < len {
+            raw.resize(len, 0);
+        }
+        let convert_span = chain_phase::CostSpan::new("metal_rect_convert_us");
+        for dy in 0..rect_h as usize {
+            let y = origin_y as usize + dy;
+            let src = &rgba[y * rgba_row + (origin_x as usize) * 4
+                ..y * rgba_row + (origin_x as usize) * 4 + (rect_w as usize) * 4];
+            // Guest store is native format; convert from tight RGBA8 (same as full write_gva path).
+            if !store_rail.convert(src, rect_w, &mut raw[dy * tight..dy * tight + tight]) {
+                return false;
+            }
+        }
+        drop(convert_span);
+        crate::runtime::drain::note_store_route_n("metal_rect_bytes", len as u64);
+        let _write_span = chain_phase::CostSpan::new("metal_rect_write_us");
+        mapping_write::write_rect_raw(
+            state,
+            host,
+            mapping_id,
+            mapping_write::Rect {
+                origin_x,
+                origin_y,
+                width: rect_w,
+                height: rect_h,
+            },
+            &raw[..len],
+            tight as u32,
+        )
+    })
 }
 
 /// The Metal rail's own checks.
