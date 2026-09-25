@@ -160,6 +160,12 @@ final class Settings: ObservableObject {
     @AppStorage("fastPAC") var fastPAC: Bool = true {
         willSet { objectWillChange.send() }
     }
+    /// macOS guest: a window surface's frame stays on the GPU until something
+    /// reads its pages (ORCHARD_METAL_LAZY_STORE in reims-vgpu's Metal rail).
+    /// Off by default while it is tried.
+    @AppStorage("lazySurfaceStore") var lazySurfaceStore: Bool = false {
+        willSet { objectWillChange.send() }
+    }
     /// Whether the guest's vibration is played on the phone's taptic engine.
     /// On by default: without guest audio there is no actuator to follow, and
     /// where the device has no taptic engine nothing starts at all.
@@ -267,6 +273,7 @@ final class Settings: ObservableObject {
         // of them.
         if guestAudio, !VMConfig.macGuest { env["ORCHARD_AUDIO"] = "1" }
         if fastPAC, VMConfig.macGuest { env["ORCHARD_PAC_IDENTITY"] = "1" }
+        if lazySurfaceStore, VMConfig.macGuest { env["ORCHARD_METAL_LAZY_STORE"] = "1" }
         if let lines = Int(guestResolution.dropFirst("screen".count)),
            guestResolution.hasPrefix("screen") {
             let size = Settings.screenShaped(lines: lines)
@@ -782,10 +789,11 @@ private struct MachineSettings: View {
                 }
                 Section {
                     Toggle(L("Быстрая проверка указателей (опыт)"), isOn: $settings.fastPAC)
+                    Toggle(L("Отложенная запись кадров окон (опыт)"), isOn: $settings.lazySurfaceStore)
                 } header: {
                     Text(L("Процессор"))
                 } footer: {
-                    Text(L("macOS подписывает указатели (PAC), и эмулятор считал каждую подпись, это 10–15% его работы. С этим переключателем гость по-прежнему видит PAC, но подписи не считаются и проверки всегда проходят. Если macOS перестанет загружаться, выключите. Применяется при запуске машины."))
+                    Text(L("macOS подписывает указатели (PAC), и эмулятор считал каждую подпись, это 10–15% его работы. С этим переключателем гость по-прежнему видит PAC, но подписи не считаются и проверки всегда проходят. Если macOS перестанет загружаться, выключите. Отложенная запись: кадр окна остаётся на GPU, пока его никто не читает, — быстрее при перетаскивании окон; если окна станут пустыми или застынут, выключите. Применяется при запуске машины."))
                 }
             }
 
