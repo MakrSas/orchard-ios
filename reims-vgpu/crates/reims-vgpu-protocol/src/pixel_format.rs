@@ -2994,6 +2994,21 @@ pub fn narrows_to_unorm8(format: u16) -> bool {
     matches!(format, MTL_FORMAT_RGBA16_FLOAT | MTL_FORMAT_RG16_FLOAT)
 }
 
+/// RGBA8 to BGRA8 and back: the two formats differ only in which end red and
+/// blue sit at, so one word-wide exchange of bytes 0 and 2 is both directions.
+///
+/// Written on whole 32-bit texels rather than as four byte stores so the
+/// compiler vectorises it: the byte-at-a-time form it replaced ran at about
+/// 1 GB/s on an iPhone and was most of a surface Store's cost, which converts
+/// up to a whole 960x540 frame at a time.
+pub fn swap_red_blue(src: &[u8], dst: &mut [u8]) {
+    for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+        let v = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+        let w = (v & 0xff00_ff00) | ((v >> 16) & 0x0000_00ff) | ((v & 0x0000_00ff) << 16);
+        d.copy_from_slice(&w.to_le_bytes());
+    }
+}
+
 /// One guest pixel format, parsed into the conversion from a **row** of its
 /// texels to a row of RGBA8.
 ///
@@ -3137,14 +3152,7 @@ impl RowToRgba8 {
         // `i * bpp` would reintroduce both.
         match self {
             Self::Rgba8 => dst.copy_from_slice(src),
-            Self::Bgra8 => {
-                for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
-                    d[COMPONENT_R] = s[2];
-                    d[COMPONENT_G] = s[1];
-                    d[COMPONENT_B] = s[0];
-                    d[COMPONENT_A] = s[3];
-                }
-            }
+            Self::Bgra8 => swap_red_blue(src, dst),
             Self::A8 => {
                 for (s, d) in src.iter().zip(dst.chunks_exact_mut(4)) {
                     let mut px = [0u8; 4];
@@ -3340,14 +3348,7 @@ impl Rgba8ToRow {
         // equal, so the bounds checks fall out and the shuffles vectorise.
         match self {
             Self::Rgba8 => dst.copy_from_slice(src),
-            Self::Bgra8 => {
-                for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
-                    d[0] = s[COMPONENT_B];
-                    d[1] = s[COMPONENT_G];
-                    d[2] = s[COMPONENT_R];
-                    d[3] = s[COMPONENT_A];
-                }
-            }
+            Self::Bgra8 => swap_red_blue(src, dst),
             Self::R8 => {
                 for (s, d) in src.chunks_exact(4).zip(dst.iter_mut()) {
                     *d = s[COMPONENT_R];
@@ -5909,5 +5910,23 @@ mod every_door_agrees_with_every_other {
             }
         }
         assert!(broken.is_empty(), "{broken:#?}");
+    }
+}
+
+#[cfg(test)]
+mod swap_red_blue_tests {
+    use super::*;
+
+    #[test]
+    fn swap_red_blue_matches_the_byte_swizzle_both_ways() {
+        let src: Vec<u8> = (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+        let mut fast = vec![0u8; src.len()];
+        swap_red_blue(&src, &mut fast);
+        for (s, d) in src.chunks_exact(4).zip(fast.chunks_exact(4)) {
+            assert_eq!(d, [s[COMPONENT_B], s[COMPONENT_G], s[COMPONENT_R], s[COMPONENT_A]]);
+        }
+        let mut back = vec![0u8; src.len()];
+        swap_red_blue(&fast, &mut back);
+        assert_eq!(back, src);
     }
 }

@@ -377,15 +377,9 @@ pub fn bind_attribute_stride(
 #[inline]
 fn swap_rb_channels(src: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8; src.len()];
-    let mut src_px = src.chunks_exact(4);
-    let mut out_px = out.chunks_exact_mut(4);
-    for (s, d) in (&mut src_px).zip(&mut out_px) {
-        d[0] = s[2];
-        d[1] = s[1];
-        d[2] = s[0];
-        d[3] = s[3];
-    }
-    let rem = src_px.remainder();
+    // Word-wide, so it vectorises: see `pixel_format::swap_red_blue`.
+    crate::protocol::pixel_format::swap_red_blue(src, &mut out);
+    let rem = &src[src.len() - src.len() % 4..];
     if !rem.is_empty() {
         let start = out.len() - rem.len();
         out[start..].copy_from_slice(rem);
@@ -411,7 +405,9 @@ fn swap_rb_channels(src: &[u8]) -> Vec<u8> {
 #[inline]
 pub(crate) fn swap_rb_channels_in_place(frame: &mut [u8]) {
     for px in frame.chunks_exact_mut(4) {
-        px.swap(0, 2);
+        let v = u32::from_le_bytes([px[0], px[1], px[2], px[3]]);
+        let w = (v & 0xff00_ff00) | ((v >> 16) & 0x0000_00ff) | ((v & 0x0000_00ff) << 16);
+        px.copy_from_slice(&w.to_le_bytes());
     }
 }
 
