@@ -1232,6 +1232,7 @@ enum Pane: String, CaseIterable {
 
 #if os(iOS)
 struct RootView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @StateObject private var model = VMModel()
     @State private var pane: Pane = .screen
     @State private var fullScreen = false
@@ -1271,6 +1272,60 @@ struct RootView: View {
     }
 
     var body: some View {
+        Group {
+            if horizontalSizeClass == .regular && model.missing.isEmpty && !fullScreen {
+                tabletView
+            } else {
+                compactView
+            }
+        }
+        .modifier(GuestActions(model: model, pane: pane, pickFile: $pickFile, pickIPA: $pickIPA,
+                               pickDEB: $pickDEB, askPath: $askPath))
+        .statusBarHidden(fullScreen)
+        .onAppear { applyEdges() }
+        .onChange(of: model.isRunning) { _ in applyEdges() }
+        .onChange(of: fullScreen) { _ in applyEdges() }
+    }
+
+    private var tabletView: some View {
+        NavigationSplitView {
+            List {
+                Button { pane = .screen } label: {
+                    Label(L("Экран"), systemImage: "display")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .listRowBackground(pane == .screen ? Color.accentColor.opacity(0.2) : Color.clear)
+                Button { pane = .terminal } label: {
+                    Label(L("Терминал"), systemImage: "terminal")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .listRowBackground(pane == .terminal ? Color.accentColor.opacity(0.2) : Color.clear)
+            }
+            .navigationTitle("Orchard")
+            .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 280)
+        } detail: {
+            Group {
+                switch pane {
+                case .screen:
+                    ScreenView(model: model, picture: model.picture, serial: model.serial,
+                               fullScreen: $fullScreen, embedded: true)
+                case .terminal:
+                    TerminalView(model: model)
+                }
+            }
+            .background(.black)
+            .navigationTitle(L(pane.rawValue))
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    ControlMenu(model: model, pane: $pane, fullScreen: $fullScreen,
+                                pickFile: $pickFile, pickIPA: $pickIPA, pickDEB: $pickDEB,
+                                askPath: $askPath, discSize: 40)
+                }
+            }
+        }
+    }
+
+    private var compactView: some View {
         NavigationStack {
             Group {
                 if !model.missing.isEmpty {
@@ -1311,20 +1366,7 @@ struct RootView: View {
                     .toolbar(.hidden, for: .navigationBar)
                 }
             }
-            .modifier(GuestActions(model: model, pane: pane, pickFile: $pickFile, pickIPA: $pickIPA,
-                                   pickDEB: $pickDEB, askPath: $askPath))
         }
-        // An ordinary app until full screen is asked for: the phone's own status
-        // bar at the top, and the home swipe doing what it always does. Full
-        // screen gives the guest the whole display, status bar included.
-        .statusBarHidden(fullScreen)
-        // And the edges: in full screen the first swipe goes to the guest and
-        // the second to the phone. The home indicator stays for that — hidden,
-        // iOS ignores the deferral, and full screen used to leave the home
-        // swipe a single one for exactly that reason.
-        .onAppear { applyEdges() }
-        .onChange(of: model.isRunning) { _ in applyEdges() }
-        .onChange(of: fullScreen) { _ in applyEdges() }
     }
 
     /// Only while the guest is running and has the whole screen.
@@ -1447,6 +1489,7 @@ struct ControlMenu: View {
                 .disabled(model.isRunning || model.hasRun || !model.missing.isEmpty
                           || model.needsRestore)
                 Button(L("Во весь экран"), systemImage: "arrow.up.left.and.arrow.down.right") {
+                    pane = .screen
                     fullScreen = true
                 }
                 if !VMConfig.macGuest {
@@ -1567,6 +1610,7 @@ struct ScreenView: View {
     @ObservedObject var serial: SerialConsole
     @ObservedObject private var settings = Settings.shared
     @Binding var fullScreen: Bool
+    var embedded = false
     /// Whether the app's own on-screen keyboard is showing. A hardware
     /// keyboard reaches the guest either way. See GuestKeyboard.swift.
     @State private var keyboard = false
@@ -1768,7 +1812,7 @@ struct ScreenView: View {
         // 15 — and centring in that is not centring on the screen. Measuring the
         // whole thing and keeping the margin ourselves is what puts the picture
         // in the actual middle.
-        .ignoresSafeArea()
+        .ignoresSafeArea(edges: embedded ? [] : .all)
     }
 
     private var placeholder: String {
